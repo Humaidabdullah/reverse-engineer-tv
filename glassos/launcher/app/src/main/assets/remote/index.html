@@ -234,11 +234,13 @@ function toast(msg) {
 }
 const native = window.TVRemoteNative || null;   // set by the Android app; null in a browser
 const buzz = ms => { try { if (native) native.haptic(ms); else if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} };
+// The phone app turns these into Android's own effects: up to 8 a tick, up to 14 a click, more a heavy click.
+const HAPTIC = { tick: 6, click: 12, heavy: 20 };
 
 // Keys go out one at a time, in order: a fast swipe must not reorder Left and Right.
 let keyChain = Promise.resolve();
-function key(k, long) {
-  buzz(long ? 18 : 6);
+function key(k, long, feel) {
+  buzz(long ? HAPTIC.heavy : HAPTIC[feel || 'click']);   // buttons click; swipe steps on the touch surface tick
   keyChain = keyChain.then(() => api('/api/key', { key: k, long: !!long }).then(r => { if (r.keys && r.keys !== state.keys) { state.keys = r.keys; paintStatus(); } }))
     .catch(e => toast(e.message));
 }
@@ -253,7 +255,7 @@ window.applyPresetById = async id => {
     if (!presets) presets = await api('/api/presets');
     const p = presets.find(x => x.id === id);
     if (!p) { toast('That preset is gone.'); return; }
-    await api('/api/presets/apply', { id }); lastApplied = id; buzz(15); toast(p.name + ' is on');
+    await api('/api/presets/apply', { id }); lastApplied = id; buzz(HAPTIC.heavy); toast(p.name + ' is on');
   } catch (e) { toast(e.message); }
 };
 
@@ -290,7 +292,7 @@ function tickProgress() {
 }
 requestAnimationFrame(tickProgress);
 async function npControl(action) {
-  buzz(8);
+  buzz(HAPTIC.click);
   try { np = await api('/api/nowplaying/control', { action }); npAt = performance.now(); paintNowPlaying(); } catch (e) { toast(e.message); }
 }
 
@@ -302,7 +304,7 @@ const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const voiceSupported = () => !!(native && native.canListen && native.canListen()) || (!!Recognition && window.isSecureContext);
 let recog = null;
 function startVoice() {
-  buzz(12);
+  buzz(HAPTIC.heavy);
   sheet(`<div class="listen"><div class="orb" aria-hidden="true"></div><div class="heard" id="heard">Listening…</div>
     <div class="tips">Try "Movie night", "Open Netflix", "Volume 20", "Pause",<br>"Search Luffy on YouTube", or any words to type on the TV.</div>
     <button class="btn" id="vStop" style="width:100%">Cancel</button></div>`);
@@ -335,7 +337,7 @@ window.onNativeVoice = (text, partial) => {
 function voiceError(msg) { const h = $('#heard'); if (h) h.textContent = msg; setTimeout(closeSheet, 1400); }
 async function voiceResult(text) {
   const h = $('#heard'); if (h) h.textContent = '"' + text + '"';
-  try { const said = await voiceCommand(text); toast(said); buzz(15); } catch (e) { toast(e.message); }
+  try { const said = await voiceCommand(text); toast(said); buzz(HAPTIC.heavy); } catch (e) { toast(e.message); }
   setTimeout(closeSheet, 500);
 }
 const norm = s => s.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -406,7 +408,7 @@ function renderPair() {
   async function finish(code) {
     try {
       const r = await api('/api/pair/finish', { code });
-      token = r.token; store.set('tvToken', token); state.name = r.name; buzz(20); render(); refresh();
+      token = r.token; store.set('tvToken', token); state.name = r.name; buzz(HAPTIC.heavy); render(); refresh();
     } catch (e) { $('#err').textContent = e.message; boxes.forEach(x => x.value = ''); boxes[0].focus(); }
   }
 }
@@ -494,8 +496,8 @@ function touchPad(pad) {
     place(e.clientX, e.clientY);
     ax += e.clientX - lx; ay += e.clientY - ly; lx = e.clientX; ly = e.clientY;
     if (Math.hypot(e.clientX - sx, e.clientY - sy) > 12) { moved = true; clearTimeout(longT); }
-    while (Math.abs(ax) >= STEP && Math.abs(ax) >= Math.abs(ay)) { key(ax > 0 ? 'right' : 'left'); ax -= Math.sign(ax) * STEP; ay *= .5; }
-    while (Math.abs(ay) >= STEP && Math.abs(ay) > Math.abs(ax)) { key(ay > 0 ? 'down' : 'up'); ay -= Math.sign(ay) * STEP; ax *= .5; }
+    while (Math.abs(ax) >= STEP && Math.abs(ax) >= Math.abs(ay)) { key(ax > 0 ? 'right' : 'left', false, 'tick'); ax -= Math.sign(ax) * STEP; ay *= .5; }
+    while (Math.abs(ay) >= STEP && Math.abs(ay) > Math.abs(ax)) { key(ay > 0 ? 'down' : 'up', false, 'tick'); ay -= Math.sign(ay) * STEP; ax *= .5; }
   });
   const end = e => {
     if (e.pointerId !== id) return;
@@ -506,7 +508,7 @@ function touchPad(pad) {
       // A quick flick shorter than one step still moves once, the way a flick on the Siri Remote does.
       const dx = e.clientX - sx, dy = e.clientY - sy;
       if (Math.max(Math.abs(dx), Math.abs(dy)) >= 18 && Math.max(Math.abs(dx), Math.abs(dy)) < STEP)
-        key(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+        key(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'), false, 'tick');
     }
   };
   pad.addEventListener('pointerup', end); pad.addEventListener('pointercancel', end);
@@ -546,7 +548,7 @@ async function renderPresets(v) {
     if (e.target.closest('[data-edit]')) return;
     const p = presets.find(x => x.id === el.dataset.id);
     try {
-      await api('/api/presets/apply', { id: p.id }); lastApplied = p.id; buzz(15); toast(p.name + ' is on');
+      await api('/api/presets/apply', { id: p.id }); lastApplied = p.id; buzz(HAPTIC.heavy); toast(p.name + ' is on');
       list.querySelectorAll('.preset').forEach(c => c.classList.toggle('applied', c.dataset.id === p.id));
       looks = null;   // the preset may have changed the wallpaper or icons: Looks fetches fresh next time
     } catch (x) { toast(x.message); }
@@ -646,7 +648,7 @@ async function onWallTap(e) {
   }
   const before = looks.wallpaper, id = tile.dataset.w;
   if (id === before) return;
-  markWall(id); buzz(10);   // at once; the TV catches up
+  markWall(id); buzz(HAPTIC.click);   // at once; the TV catches up
   try { looks = await api('/api/look', { wallpaper: id }); markWall(looks.wallpaper); }
   catch (x) { markWall(before); toast(x.message); }
 }
@@ -655,7 +657,7 @@ async function onIconTap(e) {
   const before = looks.iconTheme, i = Number(b.dataset.i);
   if (i === before) return;
   const mark = n => document.querySelectorAll('#iconSeg [data-i]').forEach(x => x.setAttribute('aria-pressed', String(Number(x.dataset.i) === n)));
-  mark(i); buzz(10);
+  mark(i); buzz(HAPTIC.click);
   try { looks = await api('/api/look', { iconTheme: i }); mark(looks.iconTheme); }
   catch (x) { mark(before); toast(x.message); }
 }
@@ -693,7 +695,7 @@ async function uploadWalls(files, v) {
   }
   // One picture: show it straight away. Several: they are in the grid to choose from.
   if (last && files.length === 1) { try { await api('/api/look', { wallpaper: last }); } catch (e) {} }
-  if (last) { buzz(15); toast(files.length === 1 ? 'On the TV now' : 'Added to Looks'); }
+  if (last) { buzz(HAPTIC.heavy); toast(files.length === 1 ? 'On the TV now' : 'Added to Looks'); }
   // Only the grid is redrawn, at the same scroll position; thumbnails already seen come from the cache.
   try { looks = await api('/api/looks'); paintLooks(); } catch (e) { toast(e.message); }
 }
@@ -705,7 +707,7 @@ async function renderApps(v) {
   const t = encodeURIComponent(token);
   $('#al').innerHTML = apps.map(a => `<button class="appb" data-pkg="${esc(a.pkg)}"><img loading="lazy" alt="" src="/api/icon?pkg=${encodeURIComponent(a.pkg)}&t=${t}"><span>${esc(a.label)}</span></button>`).join('');
   $('#al').querySelectorAll('[data-pkg]').forEach(b => b.onclick = async () => {
-    try { await api('/api/launch', { pkg: b.dataset.pkg }); buzz(12); toast('Opening ' + b.textContent.trim()); } catch (e) { toast(e.message); }
+    try { await api('/api/launch', { pkg: b.dataset.pkg }); buzz(HAPTIC.click); toast('Opening ' + b.textContent.trim()); } catch (e) { toast(e.message); }
   });
 }
 
@@ -722,7 +724,7 @@ function render() {
       (i === 2 && voiceSupported() ? `<button class="voicebtn" id="voiceTab" aria-label="Speak to the TV">${I.mic}</button>` : '')
       + `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${ic}${l}</button>`).join('')}</nav>`;
   if ($('#voiceTab')) $('#voiceTab').onclick = startVoice;
-  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; store.set('tvTab', tab); render(); });
+  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { buzz(HAPTIC.click); tab = b.dataset.tab; store.set('tvTab', tab); render(); });
   const v = $('#view');
   if (tab === 'remote') renderRemote(v);
   else if (tab === 'presets') renderPresets(v);
