@@ -122,6 +122,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean holdingDpad;
     /** tvOS-style focus (FocusMotion): the tile itself lifts, so the sliding glass highlight stays hidden. */
     private boolean tvosFocus;
+    /** PackageManager's change counter at the last rebuild of the tiles; -1 before the first. */
+    private int packageSeq = -1;
+    /** The open-app zoom: the icon's picture and the colour wash behind it, kept until Home is back. */
+    private android.widget.ImageView zoomIcon;
+    private View zoomCurtain;
+    private float zoomX, zoomY, zoomScale;
+    private boolean resumed;
     /** A held Left/Right moves focus at most this often, so each step gets a visible glide. */
     private static final long REPEAT_MS = 115;
     private long lastRepeatMove;
@@ -591,9 +598,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         } else {
             registerReceiver(packageReceiver, packageFilter);
         }
-        tilesReady = false;
         promptsPaused = false;
-        reloadApps(true);
+        resumed = true;
+        // Rebuilding every tile on every return (app list, icons, the entrance animation) is what made Home
+        // hang for a moment and the dock flicker in. Only rebuild when an app was installed, updated or
+        // removed since; otherwise Home comes back exactly as it was left.
+        android.content.pm.ChangedPackages changed = getPackageManager().getChangedPackages(Math.max(0, packageSeq));
+        boolean first = packageSeq < 0;
+        if (changed != null) packageSeq = changed.getSequenceNumber();
+        else if (first) packageSeq = 0;
+        if (first || changed != null) {
+            tilesReady = false;
+            reloadApps(first);
+        } else if (!grid.hasFocus() && topButtons.getVisibility() != View.VISIBLE) {
+            restoreFocus();
+        }
+        zoomClose();
         updateGreeting();
         updateWifiLabel();
         updateInputsButton();
@@ -664,6 +684,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     @Override
     protected void onPause() {
+        resumed = false;
         super.onPause();
         unregisterReceiver(packageReceiver);
         handler.removeCallbacks(minuteTick);
@@ -1290,6 +1311,113 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             startService(i);
         } catch (Exception e) {
             Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    // ---- opening apps, tvOS style --------------------------------------------------------------
+
+    @Override
+    public void onLaunch(View from, Intent intent, String label, int position) {
+        if (reducedMotion || from == null || from.getWidth() == 0 || root.getWidth() == 0) {
+            startApp(intent, null, label);
+            return;
+        }
+        zoomOpen(from, intent, label, adapter.ambientColorAt(position) | 0xFF000000);
+    }
+
+    /**
+     * The icon lifts off the dock and grows until it fills the screen while a wash of the app's own colour
+     * comes up behind it; the app then fades in on top. Drawn here rather than left to the system's
+     * scale-up transition, which this TV's window manager does not play.
+     */
+    private void zoomOpen(View card, Intent intent, String label, int color) {
+        removeZoom();
+        int w = card.getWidth(), h = card.getHeight();
+        android.graphics.Bitmap snap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
+        card.draw(new android.graphics.Canvas(snap));
+        int[] at = new int[2], rootAt = new int[2];
+        card.getLocationInWindow(at);
+        root.getLocationInWindow(rootAt);
+        float scale = card.getScaleX();
+        // getLocationInWindow is the scaled tile's corner; work from its centre.
+        zoomX = at[0] - rootAt[0] + w * scale / 2f - w / 2f;
+        zoomY = at[1] - rootAt[1] + h * card.getScaleY() / 2f - h / 2f;
+        zoomScale = scale;
+
+        zoomCurtain = new View(this);
+        zoomCurtain.setBackgroundColor(color);
+        zoomCurtain.setAlpha(0f);
+        root.addView(zoomCurtain, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        zoomIcon = new android.widget.ImageView(this);
+        zoomIcon.setImageBitmap(snap);
+        zoomIcon.setScaleType(android.widget.ImageView.ScaleType.FIT_XY);
+        float radius = AppAdapter.cornerRadius(w, h, density);
+        zoomIcon.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override
+            public void getOutline(View v, android.graphics.Outline o) {
+                o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
+            }
+        });
+        zoomIcon.setClipToOutline(true);
+        zoomIcon.setElevation(24 * density);
+        root.addView(zoomIcon, new FrameLayout.LayoutParams(w, h));
+        zoomIcon.setX(zoomX);
+        zoomIcon.setY(zoomY);
+        zoomIcon.setScaleX(scale);
+        zoomIcon.setScaleY(scale);
+        card.setAlpha(0f);   // the picture has left the dock
+
+        float fill = Math.max(root.getWidth() / (float) w, root.getHeight() / (float) h) * 1.06f;
+        long d = FocusMotion.ms(this, 380);
+        zoomIcon.animate().x((root.getWidth() - w) / 2f).y((root.getHeight() - h) / 2f).scaleX(fill).scaleY(fill)
+                .setDuration(d).setInterpolator(new android.view.animation.PathInterpolator(0.3f, 0f, 0.1f, 1f)).start();
+        android.animation.ObjectAnimator fade = android.animation.ObjectAnimator.ofFloat(zoomIcon, View.ALPHA, 1f, 0f);
+        fade.setStartDelay(d * 55 / 100);
+        fade.setDuration(d * 45 / 100);
+        fade.start();
+        zoomCurtain.animate().alpha(1f).setStartDelay(d / 4).setDuration(d * 3 / 4).start();
+        handler.postDelayed(() -> {
+            card.setAlpha(1f);
+            Bundle fadeIn = android.app.ActivityOptions.makeCustomAnimation(this, R.anim.app_zoom_enter, R.anim.app_zoom_hold).toBundle();
+            if (!startApp(intent, fadeIn, label)) removeZoom();
+        }, d * 7 / 10);
+        // If the app never takes over (it crashed on start, say), do not leave the screen covered.
+        handler.postDelayed(() -> {
+            if (resumed && zoomCurtain != null) zoomClose();
+        }, d + 2500);
+    }
+
+    /** Back on Home: the colour wash shrinks back into the icon on the dock, the reverse of opening. */
+    private void zoomClose() {
+        if (zoomIcon == null || zoomCurtain == null) return;
+        android.widget.ImageView icon = zoomIcon;
+        View curtain = zoomCurtain;
+        zoomIcon = null;
+        zoomCurtain = null;
+        long d = FocusMotion.ms(this, 340);
+        icon.animate().cancel();
+        icon.setAlpha(0.0f);
+        icon.animate().x(zoomX).y(zoomY).scaleX(zoomScale).scaleY(zoomScale).alpha(1f)
+                .setDuration(d).setInterpolator(new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f))
+                .withEndAction(() -> root.removeView(icon)).start();
+        curtain.animate().cancel();
+        curtain.animate().alpha(0f).setDuration(d * 8 / 10).withEndAction(() -> root.removeView(curtain)).start();
+    }
+
+    private void removeZoom() {
+        if (zoomIcon != null) root.removeView(zoomIcon);
+        if (zoomCurtain != null) root.removeView(zoomCurtain);
+        zoomIcon = null;
+        zoomCurtain = null;
+    }
+
+    private boolean startApp(Intent i, Bundle options, String label) {
+        try {
+            startActivity(i, options);
+            return true;
+        } catch (Exception e) {
+            Toast.makeText(this, getString(R.string.cant_open, label), Toast.LENGTH_SHORT).show();
+            return false;
         }
     }
 

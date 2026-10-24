@@ -61,6 +61,9 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
 
         /** Holding OK on the Settings icon: the launcher's own settings. */
         void onOpenLauncherSettings();
+
+        /** OK on an app: open it, zooming out of {@code from} (the tile at {@code position}). */
+        void onLaunch(View from, Intent intent, String label, int position);
     }
 
     static final class Entry {
@@ -333,7 +336,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         }
         h.card.setOnClickListener(v -> {
             if (h.motion != null) h.motion.press();
-            launch(e, v);
+            launch(e, v, h.getBindingAdapterPosition());
         });
         h.card.setOnLongClickListener(v -> {
             if (e.kind == Entry.SETTINGS) {
@@ -483,7 +486,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     }
 
     /** Opens the tile's activity by explicit component, with no extras: a card can name nothing else. */
-    private void launch(Entry e, View from) {
+    private void launch(Entry e, View from, int position) {
         if (e.kind == Entry.SETTINGS) {
             listener.onOpenSettings();
             return;
@@ -497,14 +500,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                 .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
                 .setComponent(e.component)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-        try {
-            // The app's window grows out of the icon, as on tvOS, instead of the stock slide.
-            android.os.Bundle zoom = from == null || from.getWidth() == 0 ? null
-                    : android.app.ActivityOptions.makeScaleUpAnimation(from, 0, 0, from.getWidth(), from.getHeight()).toBundle();
-            ctx.startActivity(i, zoom);
-        } catch (Exception ex) {
-            Toast.makeText(ctx, ctx.getString(R.string.cant_open, e.label), Toast.LENGTH_SHORT).show();
-        }
+        listener.onLaunch(from, i, e.label, position);
     }
 
     @Override
