@@ -30,6 +30,9 @@ import java.util.concurrent.Executors;
 final class HttpServer {
     private static final String TAG = "PhoneRemote";
     private static final int MAX_BODY = 64 * 1024, MAX_LINE = 8 * 1024;
+    /** Wallpapers sent from a phone arrive already sized to the screen; this is room for a 1080p JPEG. */
+    static final String UPLOAD_PATH = "/api/wallpapers/add";
+    private static final int MAX_UPLOAD = 6 * 1024 * 1024;
 
     interface Handler {
         Response handle(Request r) throws Exception;
@@ -132,6 +135,8 @@ final class HttpServer {
                 Response res;
                 try {
                     res = handler.handle(r);
+                } catch (IllegalArgumentException e) {
+                    res = Response.error(400, String.valueOf(e.getMessage()));   // the phone sent something unusable
                 } catch (Exception e) {
                     Log.w(TAG, r.method + " " + r.path + " failed", e);
                     res = Response.error(500, String.valueOf(e.getMessage()));
@@ -168,7 +173,7 @@ final class HttpServer {
             len = Integer.parseInt(r.header("content-length").isEmpty() ? "0" : r.header("content-length"));
         } catch (NumberFormatException ignored) {
         }
-        if (len < 0 || len > MAX_BODY) throw new IOException("body too large");
+        if (len < 0 || len > (r.path.equals(UPLOAD_PATH) ? MAX_UPLOAD : MAX_BODY)) throw new IOException("body too large");
         r.body = new byte[len];
         int got = 0;
         while (got < len) {

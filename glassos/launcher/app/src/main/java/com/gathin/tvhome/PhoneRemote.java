@@ -187,11 +187,13 @@ public final class PhoneRemote extends Service {
                 case "/api/apps": return HttpServer.Response.ok(apps());
                 case "/api/icon": return image("icon:" + param(r, "pkg"), () -> appIconPng(param(r, "pkg")), "image/png");
                 case "/api/looks": return HttpServer.Response.ok(looks());
-                case "/api/thumb": return image("thumb:" + param(r, "id"), () -> thumb(param(r, "id")), "image/jpeg");
+                case "/api/thumb": return image("thumb:" + param(r, "id") + ":" + thumbStamp(param(r, "id")),
+                        () -> thumb(param(r, "id")), "image/jpeg");
                 case "/api/presets": return HttpServer.Response.ok(presets());
                 default: return HttpServer.Response.error(404, "Not found");
             }
         }
+        if (p.equals(HttpServer.UPLOAD_PATH)) return HttpServer.Response.ok(addWallpaper(r.header("x-file-name"), r.body));
         JSONObject b = r.json();
         switch (p) {
             case "/api/forget": {
@@ -219,6 +221,9 @@ public final class PhoneRemote extends Service {
                         : HttpServer.Response.error(404, "That app isn't installed.");
             case "/api/look":
                 applyLook(b);
+                return HttpServer.Response.ok(looks());
+            case "/api/wallpapers/delete":
+                deleteWallpaper(b.optString("id"));
                 return HttpServer.Response.ok(looks());
             case "/api/presets/save":
                 return HttpServer.Response.ok(savePreset(b.getJSONObject("preset")));
@@ -484,9 +489,7 @@ public final class PhoneRemote extends Service {
         for (File f : Wallpapers.files(this)) {
             walls.put(new JSONObject().put("id", "f:" + f.getName()).put("label", Wallpapers.label(f)));
         }
-        for (int i = 1; i <= Wallpapers.count(); i++) {
-            walls.put(new JSONObject().put("id", "p" + i).put("label", Wallpapers.name(i, "None", "Theme")));
-        }
+        // Only the owner's pictures: the built-in gradients stay in Home settings on the TV, not on the phone.
         walls.put(new JSONObject().put("id", "daily").put("label", "Change daily"));
         walls.put(new JSONObject().put("id", "none").put("label", "Black"));
         LauncherPrefs prefs = LauncherPrefs.get(this);
@@ -518,6 +521,8 @@ public final class PhoneRemote extends Service {
     private void setWallpaper(LauncherPrefs prefs, String id) {
         if (id.startsWith("f:")) {
             String name = new File(id.substring(2)).getName();   // no paths from the phone
+            // A preset can outlive its picture (deleted from the phone): then it leaves the wallpaper alone.
+            if (!new File(getExternalFilesDir(Wallpapers.FOLDER), name).isFile()) return;
             prefs.putWallpaper(Wallpapers.FILE, name);
         } else if (id.equals("daily")) {
             prefs.putWallpaper(Wallpapers.DAILY, null);
@@ -556,6 +561,49 @@ public final class PhoneRemote extends Service {
         return out.toByteArray();
     }
 
+    private long thumbStamp(String id) {
+        if (!id.startsWith("f:")) return 0;
+        return new File(getExternalFilesDir(Wallpapers.FOLDER), new File(id.substring(2)).getName()).lastModified();
+    }
+
+    /**
+     * A picture from a phone, already cropped and sized to the screen there. Saved under a tidy version of
+     * its name ("Luffy Gear 5.jpg" -> luffy_gear_5.jpg), never over another picture.
+     */
+    private synchronized JSONObject addWallpaper(String rawName, byte[] jpeg) throws Exception {
+        if (jpeg.length < 4 || (jpeg[0] & 0xFF) != 0xFF || (jpeg[1] & 0xFF) != 0xD8) {
+            throw new IllegalArgumentException("Send a JPEG picture.");
+        }
+        String base = java.net.URLDecoder.decode(rawName, "UTF-8").toLowerCase(java.util.Locale.ROOT);
+        int dot = base.lastIndexOf('.');
+        if (dot > 0) base = base.substring(0, dot);
+        base = base.replaceAll("[^a-z0-9]+", "_").replaceAll("^_+|_+$", "");
+        if (base.isEmpty()) base = "wallpaper";
+        if (base.length() > 48) base = base.substring(0, 48);
+        File dir = getExternalFilesDir(Wallpapers.FOLDER);
+        if (dir == null) throw new IOException("No storage for wallpapers.");
+        File f = new File(dir, base + ".jpg");
+        for (int i = 2; f.exists(); i++) f = new File(dir, base + "_" + i + ".jpg");
+        File tmp = new File(dir, "." + f.getName() + ".part");
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
+            out.write(jpeg);
+        }
+        if (!tmp.renameTo(f)) throw new IOException("Could not save the picture.");
+        JSONObject looks = looks();
+        looks.put("added", "f:" + f.getName());
+        return looks;
+    }
+
+    private synchronized void deleteWallpaper(String id) {
+        if (!id.startsWith("f:")) return;
+        String name = new File(id.substring(2)).getName();
+        File f = new File(getExternalFilesDir(Wallpapers.FOLDER), name);
+        LauncherPrefs prefs = LauncherPrefs.get(this);
+        boolean current = prefs.getInt(LauncherPrefs.WALLPAPER, Wallpapers.NONE) == Wallpapers.FILE
+                && name.equals(prefs.getString(LauncherPrefs.WALL_FILE));
+        if (f.isFile() && f.delete() && current) prefs.putWallpaper(Wallpapers.NONE, null);
+    }
+
     // ---- presets -------------------------------------------------------------------------------
 
     /** A few to start from, built from what is on this TV; all of them can be edited or deleted. */
@@ -566,7 +614,7 @@ public final class PhoneRemote extends Service {
                     .put(new JSONObject().put("id", "movie").put("name", "Movie night").put("color", "#3a2a66")
                             .put("wallpaper", "none").put("iconTheme", IconThemes.DARK).put("app", "com.netflix.ninja"))
                     .put(new JSONObject().put("id", "morning").put("name", "Morning").put("color", "#c47a3d")
-                            .put("wallpaper", "f:orbital_sunrise.jpg").put("iconTheme", IconThemes.ORIGINAL)
+                            .put("wallpaper", "f:haikyuu_fly.jpg").put("iconTheme", IconThemes.ORIGINAL)
                             .put("app", "com.google.android.youtube.tv"))
                     .put(new JSONObject().put("id", "cricket").put("name", "Cricket").put("color", "#1f8a6a")
                             .put("app", "in.startv.hotstar"));
