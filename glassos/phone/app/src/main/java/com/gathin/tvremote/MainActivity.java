@@ -39,7 +39,8 @@ import android.widget.TextView;
 public class MainActivity extends Activity {
     static final String PREFS = "remote", KEY_URL = "url";
     static final String EXTRA_PRESET = "preset";
-    private static final String SERVICE_TYPE = "_tvremote._tcp.";
+    private static final String SERVICE_TYPE = "_tvremote._tcp";
+    private static final int PORT = 8642;
     private static final int PICK_IMAGES = 1;
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -121,6 +122,7 @@ public class MainActivity extends Activity {
         if (url != null) load(url);
         else showSetup("Looking for your TV on this Wi-Fi…");
         discover();
+        if (url == null) scan();
     }
 
     void load(String url) {
@@ -138,7 +140,7 @@ public class MainActivity extends Activity {
         discovery = new NsdManager.DiscoveryListener() {
             @Override public void onDiscoveryStarted(String t) { }
             @Override public void onDiscoveryStopped(String t) { }
-            @Override public void onStartDiscoveryFailed(String t, int code) { discovery = null; }
+            @Override public void onStartDiscoveryFailed(String t, int code) { discovery = null; }   // scan() still runs
             @Override public void onStopDiscoveryFailed(String t, int code) { }
             @Override public void onServiceLost(NsdServiceInfo info) { }
 
@@ -162,6 +164,85 @@ public class MainActivity extends Activity {
             nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discovery);
         } catch (RuntimeException e) {
             discovery = null;
+        }
+    }
+
+    /**
+     * The fallback when the TV's announcement never arrives (some phones and routers drop multicast):
+     * knock on port 8642 of every address on this Wi-Fi at once and ask whoever answers if it is a TV
+     * remote. A /24 takes a second or two.
+     */
+    private void scan() {
+        new Thread(() -> {
+            java.net.Inet4Address me = null;
+            int prefix = 24;
+            try {
+                android.net.ConnectivityManager cm = getSystemService(android.net.ConnectivityManager.class);
+                android.net.LinkProperties lp = cm.getLinkProperties(cm.getActiveNetwork());
+                if (lp != null) {
+                    for (android.net.LinkAddress a : lp.getLinkAddresses()) {
+                        if (a.getAddress() instanceof java.net.Inet4Address) {
+                            me = (java.net.Inet4Address) a.getAddress();
+                            prefix = a.getPrefixLength();
+                        }
+                    }
+                }
+            } catch (RuntimeException ignored) {
+            }
+            if (me == null) {
+                main.post(() -> showSetup("This phone isn't on Wi-Fi. Join the same Wi-Fi as the TV."));
+                return;
+            }
+            byte[] b = me.getAddress();
+            String base = (b[0] & 0xFF) + "." + (b[1] & 0xFF) + "." + (b[2] & 0xFF) + ".";
+            int self = b[3] & 0xFF;
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(48);
+            java.util.concurrent.atomic.AtomicBoolean found = new java.util.concurrent.atomic.AtomicBoolean();
+            for (int host = 1; host < 255; host++) {
+                if (host == self) continue;
+                String ip = base + host;
+                pool.execute(() -> {
+                    if (found.get()) return;
+                    String name = hello(ip);
+                    if (name != null && found.compareAndSet(false, true)) {
+                        main.post(() -> {
+                            if (setup != null) load("http://" + ip + ":" + PORT);
+                        });
+                    }
+                });
+            }
+            pool.shutdown();
+            try {
+                pool.awaitTermination(20, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            if (!found.get()) {
+                String where = prefix < 24 ? " on this part of the Wi-Fi" : "";
+                main.post(() -> showSetup("Couldn't find the TV" + where
+                        + ". Is it on? Type its address below: it's shown on the TV when you pair."));
+            }
+        }, "find-tv").start();
+    }
+
+    /** The TV's name when this address runs the remote, else null. */
+    private static String hello(String ip) {
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.connect(new java.net.InetSocketAddress(ip, PORT), 450);
+            s.setSoTimeout(1500);
+            java.io.OutputStream o = s.getOutputStream();
+            o.write(("GET /api/hello HTTP/1.1\r\nHost: " + ip + "\r\nConnection: close\r\n\r\n").getBytes());
+            o.flush();
+            java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[1024];
+            int n;
+            java.io.InputStream in = s.getInputStream();
+            while ((n = in.read(buf)) > 0 && body.size() < 8192) body.write(buf, 0, n);
+            String r = body.toString("UTF-8");
+            int at = r.indexOf("\r\n\r\n");
+            if (at < 0 || !r.contains("\"paired\"")) return null;
+            return new org.json.JSONObject(r.substring(at + 4)).optString("name", "TV");
+        } catch (Exception e) {
+            return null;
         }
     }
 
