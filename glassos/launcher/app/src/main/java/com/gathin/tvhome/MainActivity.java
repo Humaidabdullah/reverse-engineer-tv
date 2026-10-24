@@ -124,6 +124,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean tvosFocus;
     /** PackageManager's change counter at the last rebuild of the tiles; -1 before the first. */
     private int packageSeq = -1;
+    /** Set on the Home intent to open the app switcher (the phone remote's Switcher button). */
+    static final String EXTRA_SWITCHER = "com.gathin.tvhome.SWITCHER";
+    /** Two Home presses closer together than this open the app switcher, as a double press does on tvOS. */
+    private static final long DOUBLE_HOME_MS = 450;
+    private long lastHomeAt;
+    private AppSwitcher switcher;
+
     /** The open-app zoom (ZoomWindow): kept, fully open, until Home is back so it can close into the icon. */
     private ZoomWindow zoom;
     private View zoomTile;
@@ -271,6 +278,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             ((ViewGroup) getWindow().getDecorView()).addView(zoom,
                     new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         }
+        // Under the zoom, over Home; made once and kept hidden like the zoom.
+        switcher = new AppSwitcher(this, switcherHost);
+        ViewGroup decor = (ViewGroup) getWindow().getDecorView();
+        decor.addView(switcher, zoom != null ? decor.indexOfChild(zoom) : decor.getChildCount(),
+                new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         if (getResources().getBoolean(R.bool.phone_remote)) PhoneRemote.start(this);
         liveTvPkg = cfg.liveTvPackage;
         liveTvAction = cfg.liveTvAction;
@@ -582,7 +594,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (intent != null && intent.getBooleanExtra(EXTRA_SWITCHER, false)) {
+            showSwitcher();
+            return;
+        }
         if (intent == null || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
+        long now = SystemClock.uptimeMillis();
+        boolean twice = now - lastHomeAt < DOUBLE_HOME_MS;
+        lastHomeAt = twice ? 0 : now;
+        if (switcher.isShowing()) {   // Home while it is up: back to Home
+            switcher.dismiss();
+            return;
+        }
+        if (twice) {
+            showSwitcher();
+            return;
+        }
         grid.scrollToPosition(0);
         lastFocused = 0;
         lastFocusedKey = adapter.getItemCount() > 0 ? adapter.keyAt(0) : null;
@@ -690,6 +717,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onPause() {
         resumed = false;
+        if (switcher != null && !switcher.isOpening()) switcher.hideNow();
         super.onPause();
         unregisterReceiver(packageReceiver);
         handler.removeCallbacks(minuteTick);
@@ -1059,6 +1087,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (switcher != null && switcher.onKey(event)) return true;
         int code = event.getKeyCode();
         boolean doubleUp = false;
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
@@ -1318,6 +1347,45 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();
         }
     }
+
+    // ---- app switcher --------------------------------------------------------------------------
+
+    private void showSwitcher() {
+        if (switcher == null || switcher.isShowing()) return;
+        switcher.show(Recents.recent(this, 8));
+    }
+
+    private final AppSwitcher.Host switcherHost = new AppSwitcher.Host() {
+        @Override
+        public void closeApp(String pkg) {
+            PhoneRemote.closeApp(MainActivity.this, pkg);
+        }
+
+        @Override
+        public void openFromSwitcher(String pkg) {
+            Intent i = Recents.launchIntent(MainActivity.this, pkg);
+            if (i == null) return;
+            // The card has already grown to the screen showing the app as it was; the app fades in over it.
+            Bundle fadeIn = android.app.ActivityOptions.makeCustomAnimation(MainActivity.this,
+                    R.anim.app_zoom_enter, R.anim.app_zoom_hold).toBundle();
+            startApp(i, fadeIn, pkg);
+        }
+
+        @Override
+        public void onSwitcherClosed() {
+            if (resumed && !grid.hasFocus() && topButtons.getVisibility() != View.VISIBLE) restoreFocus();
+        }
+
+        @Override
+        public android.graphics.Bitmap homeSnapshot() {
+            int w = Math.max(1, root.getWidth() / 2), h = Math.max(1, root.getHeight() / 2);
+            android.graphics.Bitmap b = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas c = new android.graphics.Canvas(b);
+            c.scale(0.5f, 0.5f);
+            root.draw(c);
+            return b;
+        }
+    };
 
     // ---- opening apps, tvOS style --------------------------------------------------------------
 

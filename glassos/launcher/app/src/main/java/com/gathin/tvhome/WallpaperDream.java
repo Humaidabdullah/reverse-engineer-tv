@@ -84,9 +84,13 @@ public class WallpaperDream extends DreamService {
         return v;
     }
 
+    /** True while the screensaver is up, so the app switcher's watcher does not take it for an app. */
+    static volatile boolean running;
+
     @Override
     public void onDreamingStarted() {
         super.onDreamingStarted();
+        running = true;
         pictures.clear();
         pictures.addAll(Wallpapers.files(this));
         Collections.shuffle(pictures);
@@ -96,6 +100,7 @@ public class WallpaperDream extends DreamService {
 
     @Override
     public void onDreamingStopped() {
+        running = false;
         handler.removeCallbacksAndMessages(null);
         front.animate().cancel();
         back.animate().cancel();

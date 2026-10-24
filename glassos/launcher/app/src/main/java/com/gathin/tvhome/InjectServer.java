@@ -29,7 +29,8 @@ import java.nio.charset.StandardCharsets;
  * started it with, so other apps on the TV cannot use it to press keys.
  *
  * Protocol, one command per line: "k CODE" tap, "d CODE" down, "u CODE" up, "l CODE" long press,
- * "t BASE64" type text, "p" ping (answers "pong"), "s" screenshot (answers "png LENGTH" and the PNG).
+ * "t BASE64" type text, "p" ping (answers "pong"), "s" screenshot (answers "png LENGTH" and the PNG),
+ * "x PACKAGE" force-stop an app (the app switcher's close).
  */
 public final class InjectServer {
     static final String PID_FILE = "/data/local/tmp/glassos-remote.pid";
@@ -89,6 +90,9 @@ public final class InjectServer {
                     case 't': type(new String(Base64.decode(arg, Base64.DEFAULT), StandardCharsets.UTF_8)); break;
                     case 'p': out.write("pong\n".getBytes(StandardCharsets.US_ASCII)); out.flush(); break;
                     case 's': screenshot(out); break;
+                    case 'x':
+                        if (arg.matches("[A-Za-z0-9_.]+")) Runtime.getRuntime().exec(new String[]{"am", "force-stop", arg}).waitFor();
+                        break;
                     default: break;
                 }
                 } catch (Throwable e) {

@@ -440,6 +440,7 @@ function renderRemote(v) {
     </div>
     <div class="minirow">
       <button class="mini" id="kbdBtn">${I.kbd}Keyboard</button>
+      <button class="mini" data-key="switcher">${I.apps}Switcher</button>
       <button class="mini" data-key="input">${I.input}Inputs</button>
     </div>`;
   v.querySelectorAll('[data-key]').forEach(b => b.onclick = () => key(b.dataset.key));

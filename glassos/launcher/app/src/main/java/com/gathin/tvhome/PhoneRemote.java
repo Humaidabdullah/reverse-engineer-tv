@@ -129,7 +129,11 @@ public final class PhoneRemote extends Service {
         seedPresets();
         injector = new Injector(this);
         injector.warmUp();
+        running = this;
+        Recents.useCache(this);
         allowMediaAccess();
+        allowUsageAccess();
+        watchForSnapshots();
         http = new HttpServer(PORT, this::route);
         try {
             http.start();
@@ -170,6 +174,8 @@ public final class PhoneRemote extends Service {
 
     @Override
     public void onDestroy() {
+        watching = false;
+        running = null;
         if (nsdListener != null) {
             try {
                 getSystemService(android.net.nsd.NsdManager.class).unregisterService(nsdListener);
@@ -242,6 +248,11 @@ public final class PhoneRemote extends Service {
                 return HttpServer.Response.ok(new JSONObject().put("ok", true));
             }
             case "/api/key": {
+                if (b.optString("key").equals("switcher")) {
+                    startOnMain(new Intent(this, MainActivity.class).putExtra(MainActivity.EXTRA_SWITCHER, true)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    return HttpServer.Response.ok(new JSONObject().put("keys", injector.state().name()));
+                }
                 Integer code = KEYS.get(b.optString("key"));
                 if (code == null) return HttpServer.Response.error(400, "Unknown key");
                 if (b.optBoolean("long")) injector.longPress(code);
@@ -645,6 +656,73 @@ public final class PhoneRemote extends Service {
         boolean current = prefs.getInt(LauncherPrefs.WALLPAPER, Wallpapers.NONE) == Wallpapers.FILE
                 && name.equals(prefs.getString(LauncherPrefs.WALL_FILE));
         if (f.isFile() && f.delete() && current) prefs.putWallpaper(Wallpapers.NONE, null);
+    }
+
+    // ---- app switcher snapshots -----------------------------------------------------------------
+
+    private static volatile PhoneRemote running;
+
+    /** The switcher closing an app: force-stopped by the key helper, which can; the launcher cannot. */
+    static void closeApp(Context ctx, String pkg) {
+        PhoneRemote r = running;
+        if (r != null) r.injector.forceStop(pkg);
+        else ctx.getSystemService(android.app.ActivityManager.class).killBackgroundProcesses(pkg);
+    }
+
+    private static final long SNAPSHOT_MS = 8_000, SETTLE_MS = 3_000, TICK_MS = 1_500;
+    private volatile boolean watching = true;
+
+    /** The usage history (which app is in front, which were used last), allowed over loopback ADB. */
+    private void allowUsageAccess() {
+        android.app.AppOpsManager ops = getSystemService(android.app.AppOpsManager.class);
+        int mode = android.os.Build.VERSION.SDK_INT >= 29
+                ? ops.unsafeCheckOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), getPackageName())
+                : ops.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), getPackageName());
+        if (mode == android.app.AppOpsManager.MODE_ALLOWED) return;
+        new Thread(() -> {
+            try {
+                AdbLoopback.shell(this, "appops set " + getPackageName() + " GET_USAGE_STATS allow", 60_000);
+                Log.i(TAG, "usage history readable");
+            } catch (IOException e) {
+                Log.w(TAG, "could not allow usage access: " + e.getMessage());
+            }
+        }, "remote-usage-access").start();
+    }
+
+    /**
+     * While an app is on screen, its picture every few seconds for the app switcher's card. Skipped with
+     * the screen off or the screensaver up, and for anything that is not a TV app.
+     */
+    private void watchForSnapshots() {
+        Thread t = new Thread(() -> {
+            android.os.PowerManager power = getSystemService(android.os.PowerManager.class);
+            String front = null;
+            long frontSince = 0, lastShot = 0;
+            while (watching) {
+                try {
+                    Thread.sleep(TICK_MS);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (!power.isInteractive() || WallpaperDream.running) continue;
+                String fg = Recents.foreground(this);
+                long now = android.os.SystemClock.uptimeMillis();
+                if (fg == null || !fg.equals(front)) {
+                    front = fg;
+                    frontSince = now;
+                    lastShot = 0;
+                }
+                if (fg == null || fg.equals(getPackageName())) continue;
+                // Once the app has settled (past its splash), then every few seconds while it stays in front.
+                if (now - frontSince < SETTLE_MS || now - lastShot < SNAPSHOT_MS) continue;
+                if (getPackageManager().getLeanbackLaunchIntentForPackage(fg) == null) continue;
+                lastShot = now;
+                Recents.capture(fg, injector.screenshot());
+            }
+        }, "switcher-snapshots");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        t.start();
     }
 
     // ---- now playing ---------------------------------------------------------------------------

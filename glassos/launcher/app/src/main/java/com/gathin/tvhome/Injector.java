@@ -75,6 +75,11 @@ final class Injector {
         send("l " + keyCode);
     }
 
+    /** Closes an app the way Settings' Force stop does: polite background kills leave apps with services up. */
+    void forceStop(String pkg) {
+        send("x " + pkg);
+    }
+
     void type(String text) {
         send("t " + Base64.encodeToString(text.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP));
     }
@@ -95,7 +100,8 @@ final class Injector {
             String head = readLine(in);
             if (head == null || !head.startsWith("png ")) return null;
             int len = Integer.parseInt(head.substring(4).trim());
-            if (len <= 0 || len > 30_000_000) return null;
+            if (len == 0) return new byte[0];   // captured nothing: a protected window
+            if (len < 0 || len > 30_000_000) return null;
             byte[] png = new byte[len];
             in.readFully(png);
             return png;
