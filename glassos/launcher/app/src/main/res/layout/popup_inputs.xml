@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Inputs dropdown: a liquid-glass panel (background and rim set in MainActivity.showInputs). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/panel"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="7dp">
+
+    <TextView
+        android:id="@+id/header"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:paddingStart="10dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="4dp"
+        android:text="@string/inputs"
+        android:textColor="#8CFFFFFF"
+        android:textSize="12sp"
+        android:fontFamily="@font/outfit"
+        android:fontVariationSettings="'wght' 600" />
+
+    <LinearLayout
+        android:id="@+id/rows"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical" />
+</LinearLayout>
