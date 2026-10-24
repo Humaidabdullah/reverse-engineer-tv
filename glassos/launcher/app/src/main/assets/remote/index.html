@@ -94,6 +94,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .tabs button { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); padding-top: 4px; }
 .tabs button svg { width: 24px; height: 24px; }
 .tabs button[aria-selected="true"] { color: var(--fg); }
+.tabs.with-voice { grid-template-columns: 1fr 1fr 84px 1fr 1fr; align-items: end; margin-top: 40px; }   /* room for the raised button */
+.tabs .voicebtn { justify-self: center; align-self: start; width: 66px; height: 66px; margin-top: -34px; border-radius: 50%; padding: 0; gap: 0;
+  display: grid; place-items: center; color: #fff;
+  background: radial-gradient(circle at 34% 28%, #ffffff 0, #b9d4ff 18%, #6d5cff 58%, #d6478f 100%);
+  box-shadow: 0 0 0 6px var(--bg), 0 10px 26px rgba(109, 92, 255, .5); transition: transform .15s; }
+.tabs .voicebtn:active { transform: scale(.93); }
+.tabs .voicebtn svg { width: 30px; height: 30px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
 
 /* presets */
 .presets { display: grid; gap: 12px; }
@@ -400,10 +407,7 @@ function renderRemote(v) {
   v.innerHTML = `
     <div class="hdr">
       <div class="tv"><b id="tvName">${esc(state.name)}</b><span><i class="dot" id="dot"></i><em id="status" style="font-style:normal"></em></span></div>
-      <div style="display:flex;gap:10px">
-        <button class="round mic" id="micBtn" aria-label="Speak" ${voiceSupported() ? '' : 'hidden'}>${I.mic}</button>
-        <button class="round" id="power" aria-label="Power">${I.power}</button>
-      </div>
+      <button class="round" id="power" aria-label="Power">${I.power}</button>
     </div>
     <div class="getapp" id="getApp" hidden><span style="flex:1">Install the remote as an app: no browser bar, and your phone's volume buttons control the TV.</span><a href="/app.apk" download>Get app</a><button id="getAppX" aria-label="Not now">×</button></div>
     <div class="banner" id="banner" hidden></div>
@@ -434,7 +438,6 @@ function renderRemote(v) {
   v.querySelectorAll('[data-key]').forEach(b => b.onclick = () => key(b.dataset.key));
   v.querySelectorAll('[data-hold]').forEach(b => holdRepeat(b, () => key(b.dataset.hold)));
   $('#power').onclick = () => key('power');
-  $('#micBtn').onclick = startVoice;
   const showGetApp = /android/i.test(navigator.userAgent) && !native && store.get('getAppHidden') !== '1';
   $('#getApp').hidden = !showGetApp;
   $('#getAppX').onclick = () => { store.set('getAppHidden', '1'); $('#getApp').hidden = true; };
@@ -663,7 +666,10 @@ const TABS = [['remote', 'Remote', I.remote], ['presets', 'Presets', I.presets],
 function render() {
   if (!token) { renderPair(); return; }
   $('#app').innerHTML = `<div class="view ${tab === 'remote' ? '' : 'scroll'}" id="view"></div>
-    <nav class="tabs" role="tablist">${TABS.map(([k, l, ic]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${ic}${l}</button>`).join('')}</nav>`;
+    <nav class="tabs ${voiceSupported() ? 'with-voice' : ''}" role="tablist">${TABS.map(([k, l, ic], i) =>
+      (i === 2 && voiceSupported() ? `<button class="voicebtn" id="voiceTab" aria-label="Speak to the TV">${I.mic}</button>` : '')
+      + `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${ic}${l}</button>`).join('')}</nav>`;
+  if ($('#voiceTab')) $('#voiceTab').onclick = startVoice;
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; store.set('tvTab', tab); render(); });
   const v = $('#view');
   if (tab === 'remote') renderRemote(v);
