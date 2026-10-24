@@ -121,8 +121,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .wall img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .wall span { position: absolute; left: 10px; bottom: 8px; font-size: 13px; font-weight: 600; text-shadow: 0 1px 6px rgba(0,0,0,.7); }
 .wall.on { box-shadow: 0 0 0 3px #fff; }
+.wall .del { display: none; }
+.walls.editing .wall .del { display: grid; }
 .wall .del { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; border-radius: 50%; background: rgba(0,0,0,.65);
-  color: #fff; display: grid; place-items: center; font-size: 18px; line-height: 1; box-shadow: 0 0 0 1px rgba(255,255,255,.25); }
+  color: #fff; place-items: center; font-size: 18px; line-height: 1; box-shadow: 0 0 0 1px rgba(255,255,255,.25); }
 .addwall { aspect-ratio: 16/10; border-radius: 14px; border: 1.5px dashed rgba(255,255,255,.22); color: var(--muted); display: grid; place-items: center;
   text-align: center; font-size: 14px; font-weight: 600; padding: 8px; }
 .addwall b { display: block; font-size: 26px; font-weight: 300; color: var(--fg); }
@@ -543,7 +545,11 @@ async function renderPresets(v) {
   list.querySelectorAll('.preset').forEach(el => el.onclick = async e => {
     if (e.target.closest('[data-edit]')) return;
     const p = presets.find(x => x.id === el.dataset.id);
-    try { await api('/api/presets/apply', { id: p.id }); lastApplied = p.id; buzz(15); toast(p.name + ' is on'); renderPresets(v); } catch (x) { toast(x.message); }
+    try {
+      await api('/api/presets/apply', { id: p.id }); lastApplied = p.id; buzz(15); toast(p.name + ' is on');
+      list.querySelectorAll('.preset').forEach(c => c.classList.toggle('applied', c.dataset.id === p.id));
+      looks = null;   // the preset may have changed the wallpaper or icons: Looks fetches fresh next time
+    } catch (x) { toast(x.message); }
   });
   list.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editPreset(presets.find(x => x.id === b.dataset.edit)));
   $('#newPreset').onclick = () => editPreset({ name: '', color: COLORS[presets.length % COLORS.length], wallpaper: looks.wallpaper, iconTheme: looks.iconTheme });
@@ -576,45 +582,82 @@ function editPreset(p) {
 
 // ---------- looks ----------
 let editingWalls = false;
+// Looks loads once; a tap then changes only what it changed, so the page never reloads or jumps to the top.
 async function renderLooks(v) {
   v.innerHTML = `<div class="hdr"><h1>Looks</h1><button class="linkbtn" id="editWalls">${editingWalls ? 'Done' : 'Edit'}</button></div>
     <input type="file" id="pick" accept="image/*" multiple hidden>
-    <div id="lk"><p style="color:var(--muted)">Loading…</p></div>`;
-  $('#editWalls').onclick = () => { editingWalls = !editingWalls; renderLooks(v); };
+    <div id="lk">${looks ? '' : '<p style="color:var(--muted)">Loading…</p>'}</div>`;
+  $('#editWalls').onclick = () => {
+    editingWalls = !editingWalls;
+    $('#editWalls').textContent = editingWalls ? 'Done' : 'Edit';
+    const g = $('#walls'); if (g) g.classList.toggle('editing', editingWalls);
+  };
   $('#pick').onchange = e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) uploadWalls(files, v); };
+  if (looks) paintLooks();   // the last known looks at once; the fresh list replaces them below
   try { looks = await api('/api/looks'); } catch (e) { toast(e.message); return; }
+  if ($('#lk')) paintLooks();
+}
+function wallTile(w, t) {
+  return `<button class="wall ${w.id === looks.wallpaper ? 'on' : ''}" data-w="${esc(w.id)}" aria-label="${esc(w.label)}" aria-pressed="${w.id === looks.wallpaper}">
+    ${w.id === 'none' ? '<div class="ph" style="background:#000">Black</div>' : w.id === 'daily' ? '<div class="ph">A new one each day</div>'
+      : `<img loading="lazy" alt="" src="/api/thumb?id=${encodeURIComponent(w.id)}&t=${t}">`}
+    <span>${esc(w.label)}</span>
+    ${w.id.startsWith('f:') ? `<i class="del" data-del="${esc(w.id)}" role="button" aria-label="Delete ${esc(w.label)}">×</i>` : ''}</button>`;
+}
+function paintLooks() {
+  const lk = $('#lk'); if (!lk) return;
+  const view = $('#view'), keep = view ? view.scrollTop : 0;
   const t = encodeURIComponent(token);
-  $('#lk').innerHTML = `
+  lk.innerHTML = `
     <div class="section-title">Wallpaper</div>
-    <div class="walls">
+    <div class="walls ${editingWalls ? 'editing' : ''}" id="walls">
       <button class="addwall" id="addWall"><span><b>+</b>Add from your phone</span></button>
-      ${looks.wallpapers.map(w => `
-      <button class="wall ${w.id === looks.wallpaper ? 'on' : ''}" data-w="${esc(w.id)}" aria-label="${esc(w.label)}" aria-pressed="${w.id === looks.wallpaper}">
-        ${w.id === 'none' ? '<div class="ph" style="background:#000">Black</div>' : w.id === 'daily' ? '<div class="ph">A new one each day</div>'
-          : `<img loading="lazy" alt="" src="/api/thumb?id=${encodeURIComponent(w.id)}&t=${t}">`}
-        <span>${esc(w.label)}</span>
-        ${editingWalls && w.id.startsWith('f:') ? `<i class="del" data-del="${esc(w.id)}" role="button" aria-label="Delete ${esc(w.label)}">×</i>` : ''}</button>`).join('')}</div>
+      ${looks.wallpapers.map(w => wallTile(w, t)).join('')}</div>
     <div class="section-title" style="margin-top:12px">Icons</div>
-    <div class="seg">${looks.iconThemes.map((n, i) => `<button data-i="${i}" aria-pressed="${i === looks.iconTheme}">${esc(n)}</button>`).join('')}</div>
+    <div class="seg" id="iconSeg">${looks.iconThemes.map((n, i) => `<button data-i="${i}" aria-pressed="${i === looks.iconTheme}">${esc(n)}</button>`).join('')}</div>
     <div class="section-title" style="margin-top:12px">Volume</div>
     <div class="vol"><input type="range" id="lkVol" min="0" max="${state.maxVolume}" value="${state.volume}" aria-label="Volume"><output id="lkVolOut">${state.volume}</output></div>`;
+  if (view) view.scrollTop = keep;
   $('#addWall').onclick = () => $('#pick').click();
-  $('#lk').querySelectorAll('[data-w]').forEach(b => b.onclick = async e => {
-    const del = e.target.closest('[data-del]');
-    try {
-      if (del) { looks = await api('/api/wallpapers/delete', { id: del.dataset.del }); toast('Deleted'); }
-      else { looks = await api('/api/look', { wallpaper: b.dataset.w }); buzz(10); }
-      renderLooks(v);
-    } catch (x) { toast(x.message); }
-  });
-  $('#lk').querySelectorAll('[data-i]').forEach(b => b.onclick = async () => {
-    try { looks = await api('/api/look', { iconTheme: Number(b.dataset.i) }); buzz(10); renderLooks(v); } catch (e) { toast(e.message); }
-  });
+  $('#walls').addEventListener('click', onWallTap);
+  $('#iconSeg').addEventListener('click', onIconTap);
   let volTimer;
   $('#lkVol').oninput = e => {
     $('#lkVolOut').textContent = e.target.value;
     clearTimeout(volTimer); volTimer = setTimeout(() => api('/api/volume', { set: Number(e.target.value) }).then(s => { state = Object.assign(state, s); }).catch(x => toast(x.message)), 120);
   };
+}
+function markWall(id) {
+  document.querySelectorAll('#walls [data-w]').forEach(b => { const on = b.dataset.w === id; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+}
+async function onWallTap(e) {
+  const del = e.target.closest('[data-del]');
+  const tile = e.target.closest('[data-w]');
+  if (!tile) return;
+  if (del) {
+    if (!editingWalls) return;
+    const id = del.dataset.del;
+    tile.style.transition = 'opacity .2s, transform .2s'; tile.style.opacity = '0'; tile.style.transform = 'scale(.92)';
+    try {
+      looks = await api('/api/wallpapers/delete', { id });
+      tile.remove(); markWall(looks.wallpaper); toast('Deleted');
+    } catch (x) { tile.style.opacity = ''; tile.style.transform = ''; toast(x.message); }
+    return;
+  }
+  const before = looks.wallpaper, id = tile.dataset.w;
+  if (id === before) return;
+  markWall(id); buzz(10);   // at once; the TV catches up
+  try { looks = await api('/api/look', { wallpaper: id }); markWall(looks.wallpaper); }
+  catch (x) { markWall(before); toast(x.message); }
+}
+async function onIconTap(e) {
+  const b = e.target.closest('[data-i]'); if (!b) return;
+  const before = looks.iconTheme, i = Number(b.dataset.i);
+  if (i === before) return;
+  const mark = n => document.querySelectorAll('#iconSeg [data-i]').forEach(x => x.setAttribute('aria-pressed', String(Number(x.dataset.i) === n)));
+  mark(i); buzz(10);
+  try { looks = await api('/api/look', { iconTheme: i }); mark(looks.iconTheme); }
+  catch (x) { mark(before); toast(x.message); }
 }
 
 // Pictures are cropped to the TV's 16:9 and sized to 1920x1080 here on the phone, so a 12 MB photo goes over
@@ -651,7 +694,8 @@ async function uploadWalls(files, v) {
   // One picture: show it straight away. Several: they are in the grid to choose from.
   if (last && files.length === 1) { try { await api('/api/look', { wallpaper: last }); } catch (e) {} }
   if (last) { buzz(15); toast(files.length === 1 ? 'On the TV now' : 'Added to Looks'); }
-  renderLooks(v);
+  // Only the grid is redrawn, at the same scroll position; thumbnails already seen come from the cache.
+  try { looks = await api('/api/looks'); paintLooks(); } catch (e) { toast(e.message); }
 }
 
 // ---------- apps ----------
