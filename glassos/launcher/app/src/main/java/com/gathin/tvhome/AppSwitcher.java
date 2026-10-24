@@ -72,8 +72,11 @@ final class AppSwitcher extends View {
     private final Paint ground = new Paint(), dim = new Paint(Paint.ANTI_ALIAS_FLAG), rim = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint title = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF r = new RectF(), ir = new RectF(), src = new RectF();
-    private final SpringAnimation slide, appear, grow, flyAway;
+    private final SpringAnimation slide, appear, grow, flyAway, closeGap;
     private float pos, shown, grown;
+    /** Closing a card: the cards from {@link #gapAt} on sit {@link #gap} slots further right, closing to 0. */
+    private float gap;
+    private int gapAt = -1;
     private int focus;
     private float s = 1f;   // screen width / 1920: the layout is written for 1920x1080
     private Item closing;
@@ -82,6 +85,7 @@ final class AppSwitcher extends View {
     private static final FloatPropertyCompat<AppSwitcher> SHOWN = prop("shown");
     private static final FloatPropertyCompat<AppSwitcher> GROWN = prop("grown");
     private static final FloatPropertyCompat<AppSwitcher> LIFT = prop("lift");
+    private static final FloatPropertyCompat<AppSwitcher> GAP = prop("gap");
 
     private static FloatPropertyCompat<AppSwitcher> prop(String name) {
         return new FloatPropertyCompat<AppSwitcher>(name) {
@@ -91,6 +95,7 @@ final class AppSwitcher extends View {
                     case "pos": return a.pos;
                     case "shown": return a.shown;
                     case "grown": return a.grown;
+                    case "gap": return a.gap;
                     default: return a.closing == null ? 0 : a.closing.lift;
                 }
             }
@@ -101,6 +106,7 @@ final class AppSwitcher extends View {
                     case "pos": a.pos = v; break;
                     case "shown": a.shown = v; break;
                     case "grown": a.grown = v; break;
+                    case "gap": a.gap = v; break;
                     default: if (a.closing != null) a.closing.lift = v; break;
                 }
                 a.invalidate();
@@ -126,8 +132,12 @@ final class AppSwitcher extends View {
         appear.setMinimumVisibleChange(0.002f);
         grow = new SpringAnimation(this, GROWN).setSpring(new SpringForce(1f).setStiffness(260f).setDampingRatio(0.9f));
         grow.setMinimumVisibleChange(0.001f);
-        flyAway = new SpringAnimation(this, LIFT).setSpring(new SpringForce(1f).setStiffness(220f).setDampingRatio(0.9f));
+        // A flick: quick and without bounce, so the card is gone before the others have settled.
+        flyAway = new SpringAnimation(this, LIFT).setSpring(new SpringForce(1f).setStiffness(320f).setDampingRatio(1f));
         flyAway.setMinimumVisibleChange(0.002f);
+        // The same spring as the slide, so a card that should stay put (the slide and the gap cancel out) does.
+        closeGap = new SpringAnimation(this, GAP).setSpring(new SpringForce(0f).setStiffness(260f).setDampingRatio(0.88f));
+        closeGap.setMinimumVisibleChange(0.001f);
         appear.addEndListener((a, cancelled, v, vel) -> {
             if (!cancelled && v < 0.01f) finish();
         });
@@ -138,7 +148,20 @@ final class AppSwitcher extends View {
             main.postDelayed(this::finish, 400);   // after the app has drawn over it
         });
         flyAway.addEndListener((a, cancelled, v, vel) -> {
-            if (!cancelled) removeClosed();
+            if (cancelled) return;
+            Item gone = closing;
+            closing = null;
+            if (gone != null) {
+                if (gone.face != null) gone.face.recycle();
+                if (gone.icon != null) gone.icon.recycle();
+                // Stopped only now: a force-stop is a burst of work for this TV, and during the flick it cost frames.
+                host.closeApp(gone.pkg);
+            }
+            if (items.size() <= 1) dismiss();   // only Home left
+            invalidate();
+        });
+        closeGap.addEndListener((a, cancelled, v, vel) -> {
+            if (!cancelled) gapAt = -1;
         });
     }
 
@@ -253,32 +276,31 @@ final class AppSwitcher extends View {
         grow.start();
     }
 
-    /** Up on an app: its card flies up and away, the app is closed, and the deck closes the gap. */
+    /**
+     * Up on an app: its card flicks up and away while the next app slides into its place, in one motion.
+     * The card leaves the list at once; the cards after it start one slot further right (the gap) and the
+     * gap closes on the same spring as the slide, so nothing jumps.
+     */
     private void closeFocused() {
         Item it = items.get(focus);
-        if (it.pkg == null || closing != null) return;
+        if (it.pkg == null || closing != null || gapAt >= 0) return;   // one close at a time, deck settled
+        int at = focus;
+        items.remove(at);
         closing = it;
-        flyAway.setStartValue(0f);
-        flyAway.start();
-        host.closeApp(it.pkg);
+        it.lift = 0f;
         Recents.forget(it.pkg);
-    }
-
-    private void removeClosed() {
-        int at = items.indexOf(closing);
-        if (at >= 0) {
-            Item gone = items.remove(at);
-            if (gone.face != null) gone.face.recycle();
-            if (gone.icon != null) gone.icon.recycle();
-        }
-        closing = null;
-        if (items.size() <= 1) {   // only Home left
-            dismiss();
-            return;
-        }
-        // The next older app comes forward into the gap, as the deck closes up.
-        focus = Math.max(0, at - 1);
+        // pos is left where it is, mid-slide or not: with the gap, every card keeps its place this frame.
+        gapAt = at;
+        gap = 1f;
+        // The next older app comes forward from the deck; with none older, the next one slides in from the right.
+        focus = at > 0 ? at - 1 : 0;
         slide.animateToFinalPosition(focus);
+        closeGap.setStartValue(1f);
+        closeGap.animateToFinalPosition(0f);
+        flyAway.setStartValue(0f);
+        flyAway.setStartVelocity(4f);
+        flyAway.start();
+        FocusMotion.Sound.tick(getContext());
     }
 
     // ---- content --------------------------------------------------------------------------------
@@ -395,13 +417,13 @@ final class AppSwitcher extends View {
         Integer[] order = new Integer[n];
         for (int i = 0; i < n; i++) order[i] = i;
         java.util.Arrays.sort(order, (x, y) -> {
-            float dx = x - pos, dy = y - pos;
+            float dx = x - pos + (gapAt >= 0 && x >= gapAt ? gap : 0f), dy = y - pos + (gapAt >= 0 && y >= gapAt ? gap : 0f);
             float kx = dx <= 0 ? -dx * 2 : dx * 2 - 0.5f, ky = dy <= 0 ? -dy * 2 : dy * 2 - 0.5f;   // further = earlier
             return Float.compare(ky, kx);
         });
         for (int idx : order) {
             Item it = items.get(idx);
-            float d = idx - pos;
+            float d = idx - pos + (gapAt >= 0 && idx >= gapAt ? gap : 0f);
             if (d < -3.5f || d > 1.8f) continue;
             float sc, x, dimA;
             if (d <= 0) {           // the deck: further back is smaller, darker and further left
@@ -415,11 +437,8 @@ final class AppSwitcher extends View {
                 dimA = 0.15f * Math.min(1f, d);
             }
             float w = cardW * sc, h = cardH * sc, y = cardY + (cardH - h) / 2f;
-            if (it.lift > 0f) {
-                y -= (cardY + h) * it.lift;
-            }
             r.set(x, y, x + w, y + h);
-            float alpha = a * (it.lift > 0 ? 1f - it.lift : 1f) * (d < -2.5f ? Math.max(0f, 3.5f + d) : 1f);
+            float alpha = a * (d < -2.5f ? Math.max(0f, 3.5f + d) : 1f);
             if (idx == focus && grown > 0f) {   // opening: the card grows to the screen
                 float gx = W / zoom, gy = H / zoom;   // undo the appear scale at full growth
                 r.set(lerp(r.left, (W - gx) / 2f, grown), lerp(r.top, (H - gy) / 2f, grown),
@@ -427,7 +446,14 @@ final class AppSwitcher extends View {
             }
             float rad = idx == focus ? lerp(radius, 0, grown) : radius;
             drawFace(c, it, r, rad, alpha, dimA);
-            if (d <= 0.6f && idx != focus || idx == focus) drawHeader(c, it, r, d, alpha);
+            if (d <= 0.6f) drawHeader(c, it, r, d, alpha);
+        }
+        if (closing != null) {   // flicking up and away, over the others, shrinking a little as it goes
+            float l = closing.lift, sc = 1f - 0.08f * l;
+            float w = cardW * sc, h = cardH * sc;
+            float x = cardX + (cardW - w) / 2f, y = cardY + (cardH - h) / 2f - (cardY + cardH) * l;
+            r.set(x, y, x + w, y + h);
+            drawFace(c, closing, r, radius, a * Math.max(0f, 1f - l * 1.2f), 0f);
         }
         c.restore();
     }
