@@ -653,18 +653,34 @@ public final class PhoneRemote extends Service {
      * Reading other apps' media sessions needs a notification listener. The launcher allows its own over
      * the loopback ADB connection once; the owner never sees a prompt for it.
      */
+    private long mediaAccessAt;
+
     private void allowMediaAccess() {
         android.content.ComponentName me = new android.content.ComponentName(this, MediaListener.class);
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        if (android.os.Build.VERSION.SDK_INT >= 27 && nm.isNotificationListenerAccessGranted(me)) return;
+        if (canReadSessions(me)) return;
+        // Also after every update of the launcher: the TV keeps the listener in its settings but refuses
+        // getActiveSessions until it is allowed again, so it is withdrawn and allowed in one go.
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - mediaAccessAt < 60_000) return;
+        mediaAccessAt = now;
+        String c = me.flattenToString();
         new Thread(() -> {
             try {
-                AdbLoopback.shell(this, "cmd notification allow_listener " + me.flattenToString(), 60_000);
-                Log.i(TAG, "media sessions readable");
+                AdbLoopback.shell(this, "cmd notification disallow_listener " + c + "; cmd notification allow_listener " + c, 60_000);
+                Log.i(TAG, "media sessions readable: " + canReadSessions(me));
             } catch (IOException e) {
                 Log.w(TAG, "could not allow media access: " + e.getMessage());
             }
         }, "remote-media-access").start();
+    }
+
+    private boolean canReadSessions(android.content.ComponentName me) {
+        try {
+            getSystemService(android.media.session.MediaSessionManager.class).getActiveSessions(me);
+            return true;
+        } catch (SecurityException e) {
+            return false;
+        }
     }
 
     /** The session worth showing: one that is playing, else the most recent one with something loaded. */
@@ -682,7 +698,8 @@ public final class PhoneRemote extends Service {
             }
             return fallback;
         } catch (SecurityException e) {
-            return null;   // not allowed yet
+            allowMediaAccess();   // not allowed (yet, or again after an update): fix it for the next poll
+            return null;
         }
     }
 
@@ -712,9 +729,16 @@ public final class PhoneRemote extends Service {
             }
         }
         if (duration > 0) position = Math.max(0, Math.min(position, duration));
+        boolean frame = md == null || !hasArtwork(md);
+        // Wide for a frame of the screen, and for artwork that is itself wide (YouTube's thumbnails).
+        Bitmap shared = null;
+        if (md != null) for (String k : ART_BITMAPS) if (shared == null) shared = md.getBitmap(k);
+        boolean wide = frame || (shared != null && shared.getWidth() > shared.getHeight() * 1.3f);
+        String artKey = Integer.toHexString((pkg + title).hashCode())
+                + (frame ? "-" + (playing ? System.currentTimeMillis() / 15_000 : 0) : "");
         return o.put("pkg", pkg).put("app", app).put("title", title).put("subtitle", sub)
                 .put("playing", playing).put("position", position).put("duration", duration)
-                .put("art", Integer.toHexString((pkg + title).hashCode()))
+                .put("art", artKey).put("artWide", wide)
                 .put("canSeek", st != null && (st.getActions() & android.media.session.PlaybackState.ACTION_SEEK_TO) != 0);
     }
 
@@ -726,22 +750,73 @@ public final class PhoneRemote extends Service {
         return "";
     }
 
+    private static final String[] ART_BITMAPS = {android.media.MediaMetadata.METADATA_KEY_ART,
+            android.media.MediaMetadata.METADATA_KEY_ALBUM_ART, android.media.MediaMetadata.METADATA_KEY_DISPLAY_ICON};
+    private static final String[] ART_URIS = {android.media.MediaMetadata.METADATA_KEY_ART_URI,
+            android.media.MediaMetadata.METADATA_KEY_ALBUM_ART_URI, android.media.MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI};
+
+    private static boolean hasArtwork(android.media.MediaMetadata md) {
+        for (String k : ART_BITMAPS) if (md.getBitmap(k) != null) return true;
+        for (String k : ART_URIS) if (md.getString(k) != null) return true;
+        return false;
+    }
+
+    /**
+     * The app's artwork when it shares some (a picture, or a link the TV fetches); otherwise a frame of what
+     * is on screen, which is what YouTube needs since it shares no thumbnail. Protected video (Netflix)
+     * captures as black, and then the app's icon stands in.
+     */
     private HttpServer.Response nowPlayingArt() throws Exception {
         android.media.session.MediaController c = controller();
         if (c == null) return HttpServer.Response.error(404, "Nothing is playing.");
         android.media.MediaMetadata md = c.getMetadata();
         Bitmap art = null;
         if (md != null) {
-            for (String k : new String[]{android.media.MediaMetadata.METADATA_KEY_ART, android.media.MediaMetadata.METADATA_KEY_ALBUM_ART,
-                    android.media.MediaMetadata.METADATA_KEY_DISPLAY_ICON}) {
-                if (art == null) art = md.getBitmap(k);
-            }
+            for (String k : ART_BITMAPS) if (art == null) art = md.getBitmap(k);
+            for (String k : ART_URIS) if (art == null && md.getString(k) != null) art = fetchImage(md.getString(k));
         }
+        if (art == null) art = screenFrame();
         if (art == null) return new HttpServer.Response(200, "image/png", appIconPng(c.getPackageName())).cached(60);
         if (art.getWidth() > 640) art = Bitmap.createScaledBitmap(art, 640, Math.max(1, art.getHeight() * 640 / art.getWidth()), true);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         art.compress(Bitmap.CompressFormat.JPEG, 82, out);
         return new HttpServer.Response(200, "image/jpeg", out.toByteArray()).cached(60);
+    }
+
+    private static Bitmap fetchImage(String uri) {
+        if (!uri.startsWith("http")) return null;
+        try {
+            java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL(uri).openConnection();
+            h.setConnectTimeout(3000);
+            h.setReadTimeout(4000);
+            try (InputStream in = h.getInputStream()) {
+                return BitmapFactory.decodeStream(in);
+            } finally {
+                h.disconnect();
+            }
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** A quarter-size frame of the screen, or null when it is (nearly) all black. */
+    private Bitmap screenFrame() {
+        byte[] png = injector.screenshot();
+        if (png == null) return null;
+        BitmapFactory.Options o = new BitmapFactory.Options();
+        o.inSampleSize = 4;
+        Bitmap b = BitmapFactory.decodeByteArray(png, 0, png.length, o);
+        if (b == null) return null;
+        long sum = 0;
+        int n = 0;
+        for (int y = b.getHeight() / 8; y < b.getHeight(); y += b.getHeight() / 8) {
+            for (int x = b.getWidth() / 8; x < b.getWidth(); x += b.getWidth() / 8) {
+                int px = b.getPixel(x, y);
+                sum += ((px >> 16) & 0xFF) + ((px >> 8) & 0xFF) + (px & 0xFF);
+                n++;
+            }
+        }
+        return n > 0 && sum / (n * 3) < 6 ? null : b;
     }
 
     /** Through the app's own session, so Play/Pause and skipping work like the app's own buttons. */

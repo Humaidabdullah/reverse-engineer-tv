@@ -43,7 +43,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 /* now playing */
 .np { display: flex; gap: 12px; align-items: center; background: var(--surface); border-radius: 18px; padding: 10px 12px 12px; position: relative; overflow: hidden; }
 .np[hidden] { display: none; }
-.np img { width: 54px; height: 54px; border-radius: 10px; object-fit: cover; background: var(--surface-2); flex: none; }
+.np img { width: 54px; height: 54px; border-radius: 10px; object-fit: cover; background: var(--surface-2); flex: none; transition: width .25s; }
+.np img.wide { width: 96px; }   /* a frame of the video, 16:9 */
 .np .meta { flex: 1; min-width: 0; }
 .np .t { font-weight: 650; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .np .s { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -269,7 +270,13 @@ function paintNowPlaying() {
   $('#npTitle').textContent = np.title || np.app;
   $('#npSub').textContent = [np.subtitle, np.title ? np.app : ''].filter(Boolean).join(' · ');
   $('#npPlay').innerHTML = np.playing ? I.pause : I.playOnly;
-  if (npArtKey !== np.art) { npArtKey = np.art; $('#npArt').src = '/api/nowplaying/art?t=' + encodeURIComponent(token) + '&k=' + np.art; }
+  if (npArtKey !== np.art) {
+    npArtKey = np.art;
+    // Load off-screen first, so a fresh frame swaps in without flashing an empty box.
+    const next = new Image();
+    next.onload = () => { const img = $('#npArt'); if (img) { img.src = next.src; img.classList.toggle('wide', !!np.artWide); } };
+    next.src = '/api/nowplaying/art?t=' + encodeURIComponent(token) + '&k=' + np.art;
+  }
 }
 function tickProgress() {
   const bar = $('#npProg');

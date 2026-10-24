@@ -42,7 +42,14 @@ final class Injector {
             t = randomHex(16);
             sp.edit().putString("helper_token", t).apply();
         }
-        token = t;
+        // Tied to this install: after an update the running helper (old code, from the old APK) no longer
+        // matches, answers "denied", and start() replaces it with the one from the new APK.
+        long installed = 0;
+        try {
+            installed = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0).lastUpdateTime;
+        } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
+        }
+        token = t + "-" + installed;
     }
 
     State state() {
@@ -70,6 +77,38 @@ final class Injector {
 
     void type(String text) {
         send("t " + Base64.encodeToString(text.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP));
+    }
+
+    /**
+     * The screen as a PNG, on its own short connection so a frame never sits between key presses.
+     * Null when the helper is not running or the capture fails; never starts the helper itself.
+     */
+    byte[] screenshot() {
+        try (Socket s = new Socket()) {
+            s.connect(new InetSocketAddress("127.0.0.1", PORT), 300);
+            s.setSoTimeout(5000);
+            OutputStream o = s.getOutputStream();
+            o.write((token + "\ns\n").getBytes(StandardCharsets.US_ASCII));
+            o.flush();
+            java.io.DataInputStream in = new java.io.DataInputStream(new java.io.BufferedInputStream(s.getInputStream()));
+            if (!"ok".equals(readLine(in))) return null;
+            String head = readLine(in);
+            if (head == null || !head.startsWith("png ")) return null;
+            int len = Integer.parseInt(head.substring(4).trim());
+            if (len <= 0 || len > 30_000_000) return null;
+            byte[] png = new byte[len];
+            in.readFully(png);
+            return png;
+        } catch (IOException | NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static String readLine(java.io.DataInputStream in) throws IOException {
+        StringBuilder b = new StringBuilder();
+        int c;
+        while ((c = in.read()) != -1 && c != '\n') b.append((char) c);
+        return c == -1 && b.length() == 0 ? null : b.toString();
     }
 
     private void send(String line) {

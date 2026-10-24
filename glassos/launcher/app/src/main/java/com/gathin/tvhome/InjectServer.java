@@ -29,7 +29,7 @@ import java.nio.charset.StandardCharsets;
  * started it with, so other apps on the TV cannot use it to press keys.
  *
  * Protocol, one command per line: "k CODE" tap, "d CODE" down, "u CODE" up, "l CODE" long press,
- * "t BASE64" type text, "p" ping (answers "pong").
+ * "t BASE64" type text, "p" ping (answers "pong"), "s" screenshot (answers "png LENGTH" and the PNG).
  */
 public final class InjectServer {
     static final String PID_FILE = "/data/local/tmp/glassos-remote.pid";
@@ -88,6 +88,7 @@ public final class InjectServer {
                     case 'l': longPress(Integer.parseInt(arg)); break;
                     case 't': type(new String(Base64.decode(arg, Base64.DEFAULT), StandardCharsets.UTF_8)); break;
                     case 'p': out.write("pong\n".getBytes(StandardCharsets.US_ASCII)); out.flush(); break;
+                    case 's': screenshot(out); break;
                     default: break;
                 }
                 } catch (Throwable e) {
@@ -100,6 +101,21 @@ public final class InjectServer {
         } catch (Exception ignored) {
             // A dropped connection; the launcher reconnects.
         }
+    }
+
+    /** The screen as the shell sees it (video included, unless the app marks it protected). */
+    private static void screenshot(OutputStream out) throws Exception {
+        Process p = Runtime.getRuntime().exec(new String[]{"screencap", "-p"});
+        java.io.ByteArrayOutputStream png = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[65536];
+        int n;
+        try (java.io.InputStream in = p.getInputStream()) {
+            while ((n = in.read(buf)) > 0) png.write(buf, 0, n);
+        }
+        p.waitFor();
+        out.write(("png " + png.size() + "\n").getBytes(StandardCharsets.US_ASCII));
+        png.writeTo(out);
+        out.flush();
     }
 
     private static void tap(int code) throws Exception {
