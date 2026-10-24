@@ -259,6 +259,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         reducedMotion = cfg.reducedMotion;
         tvosFocus = !reducedMotion && getResources().getBoolean(R.bool.tvos_focus);
         if (tvosFocus) FocusMotion.Sound.init(this);
+        if (getResources().getBoolean(R.bool.phone_remote)) PhoneRemote.start(this);
         liveTvPkg = cfg.liveTvPackage;
         liveTvAction = cfg.liveTvAction;
         inputAction = cfg.inputAction;

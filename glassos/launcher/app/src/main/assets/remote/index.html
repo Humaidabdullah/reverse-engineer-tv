@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0b0b0e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TV Remote">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>TV Remote</title>
+<style>
+/* A remote, not a page: one dark surface, thumb-reachable controls, nothing that scrolls on the Remote tab. */
+:root {
+  color-scheme: dark;
+  --bg: #0b0b0e; --surface: #1b1c21; --surface-2: #26272e; --key: #2c2d34; --key-on: #3b3c45;
+  --line: rgba(255,255,255,.08); --fg: #f4f4f6; --muted: #8e8f99; --ok: #5bd28a; --warn: #f2b94b; --bad: #ff6b6b;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, system-ui, sans-serif;
+  --top: env(safe-area-inset-top, 0px); --bottom: env(safe-area-inset-bottom, 0px);
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 var(--font); overscroll-behavior: none; }
+body { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+button { font: inherit; color: inherit; border: 0; background: none; padding: 0; cursor: pointer; touch-action: manipulation; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #8fb8ff; outline-offset: 2px; }
+.app { height: 100%; display: flex; flex-direction: column; max-width: 520px; margin: 0 auto; padding-top: calc(var(--top) + 14px); }
+.view { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+.view.scroll { overflow-y: auto; padding-bottom: 20px; }
+.hdr { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.hdr h1 { font-size: 28px; font-weight: 700; margin: 0; letter-spacing: -.01em; }
+.tv { display: flex; flex-direction: column; }
+.tv b { font-size: 20px; font-weight: 650; }
+.tv span { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.round { width: 44px; height: 44px; border-radius: 50%; background: var(--key); display: grid; place-items: center; flex: none; }
+.round svg { width: 20px; height: 20px; }
+.banner { background: rgba(242,185,75,.12); border: 1px solid rgba(242,185,75,.35); color: #f7d58d; border-radius: 14px; padding: 10px 12px; font-size: 14px; }
+.banner[hidden] { display: none; }
+
+/* touch surface */
+.pad { flex: 1; min-height: 220px; border-radius: 28px; position: relative; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none;
+  background: radial-gradient(90% 70% at 50% 35%, #2a2b33, #1c1d22 70%); box-shadow: inset 0 0 0 1px var(--line); }
+.pad .glow { position: absolute; width: 180px; height: 180px; margin: -90px 0 0 -90px; border-radius: 50%; pointer-events: none; opacity: 0;
+  background: radial-gradient(closest-side, rgba(255,255,255,.16), transparent); transition: opacity .25s; }
+.pad.touching .glow { opacity: 1; }
+.pad .hint { position: absolute; left: 0; right: 0; bottom: 16px; text-align: center; color: rgba(255,255,255,.32); font-size: 13px; pointer-events: none; }
+.pad .flash { position: absolute; inset: 0; background: rgba(255,255,255,.06); opacity: 0; transition: opacity .3s; pointer-events: none; }
+.pad .flash.on { opacity: 1; transition: none; }
+
+.keys { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: auto auto; gap: 14px; justify-items: center; }
+.key { width: 72px; height: 72px; border-radius: 50%; background: var(--key); display: grid; place-items: center; transition: background .12s, transform .12s; }
+.key:active, .key.down { background: var(--key-on); transform: scale(.96); }
+.key svg { width: 26px; height: 26px; }
+.rocker { grid-row: span 2; width: 72px; height: 158px; border-radius: 36px; background: var(--key); display: flex; flex-direction: column; overflow: hidden; }
+.rocker button { flex: 1; display: grid; place-items: center; }
+.rocker button:active { background: var(--key-on); }
+.rocker svg { width: 22px; height: 22px; }
+.minirow { display: flex; justify-content: center; gap: 22px; }
+.mini { height: 40px; padding: 0 16px; border-radius: 20px; background: var(--surface); color: var(--muted); font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.mini svg { width: 16px; height: 16px; }
+
+/* tabs */
+.tabs { display: grid; grid-template-columns: repeat(4, 1fr); padding: 10px 0 calc(var(--bottom) + 8px); border-top: 1px solid var(--line); margin-top: 12px; }
+.tabs button { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: var(--muted); padding-top: 4px; }
+.tabs button svg { width: 24px; height: 24px; }
+.tabs button[aria-selected="true"] { color: var(--fg); }
+
+/* presets */
+.presets { display: grid; gap: 12px; }
+.preset { border-radius: 22px; padding: 18px; display: flex; align-items: center; gap: 12px; text-align: left; position: relative; min-height: 84px; }
+.preset .pn { font-size: 19px; font-weight: 650; }
+.preset .pd { font-size: 13px; opacity: .82; margin-top: 2px; }
+.preset .txt { flex: 1; min-width: 0; }
+.preset .edit { width: 38px; height: 38px; border-radius: 50%; background: rgba(0,0,0,.22); display: grid; place-items: center; flex: none; }
+.preset .edit svg { width: 18px; height: 18px; }
+.preset.applied::after { content: "On"; position: absolute; top: 12px; right: 60px; font-size: 12px; font-weight: 700; background: rgba(255,255,255,.9); color: #111; border-radius: 8px; padding: 2px 7px; }
+.ghost { border-radius: 22px; padding: 16px; border: 1.5px dashed rgba(255,255,255,.18); color: var(--muted); font-weight: 600; }
+
+/* looks */
+.section-title { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin: 6px 2px 0; }
+.walls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.wall { aspect-ratio: 16/10; border-radius: 14px; overflow: hidden; position: relative; background: #000; box-shadow: inset 0 0 0 1px var(--line); }
+.wall img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wall span { position: absolute; left: 10px; bottom: 8px; font-size: 13px; font-weight: 600; text-shadow: 0 1px 6px rgba(0,0,0,.7); }
+.wall.on { box-shadow: 0 0 0 3px #fff; }
+.wall .ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; background: linear-gradient(135deg, #1d1f2b, #2d2142); }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--surface); border-radius: 12px; padding: 3px; gap: 3px; }
+.seg button { padding: 9px 4px; border-radius: 9px; font-size: 14px; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--surface-2); color: var(--fg); font-weight: 600; }
+.vol { display: flex; align-items: center; gap: 12px; background: var(--surface); border-radius: 14px; padding: 12px 14px; }
+.vol output { width: 34px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+input[type=range] { flex: 1; accent-color: #fff; }
+
+/* apps */
+.apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 18px 10px; }
+.appb { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12px; color: #d8d9de; text-align: center; min-width: 0; }
+.appb img { width: 64px; height: 64px; border-radius: 15px; background: var(--surface); }
+.appb span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* sheets */
+.sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; justify-content: center; z-index: 20; }
+.sheet-bg[hidden] { display: none; }
+.sheet { width: 100%; max-width: 520px; max-height: 88%; overflow-y: auto; background: #18191e; border-radius: 22px 22px 0 0;
+  padding: 18px max(18px, env(safe-area-inset-left, 0px)) calc(var(--bottom) + 18px); display: grid; gap: 14px; }
+.sheet h2 { margin: 0; font-size: 20px; }
+.field { display: grid; gap: 6px; }
+.field label { font-size: 13px; color: var(--muted); }
+.field input[type=text], .field select, .kbd input { width: 100%; background: var(--surface); color: var(--fg); border: 1px solid var(--line); border-radius: 12px; padding: 12px; font: inherit; }
+.swatches { display: flex; gap: 10px; flex-wrap: wrap; }
+.swatch { width: 34px; height: 34px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255,255,255,.2); }
+.swatch[aria-pressed="true"] { box-shadow: 0 0 0 3px #18191e, 0 0 0 5px #fff; }
+.row { display: flex; gap: 10px; }
+.btn { flex: 1; padding: 13px; border-radius: 14px; background: var(--surface-2); font-weight: 600; }
+.btn.primary { background: #fff; color: #111; }
+.btn.danger { color: var(--bad); }
+.kbd { display: flex; gap: 8px; }
+.kbd input { flex: 1; }
+
+/* pairing */
+.pair { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 18px; text-align: center; padding-bottom: 12vh; }
+.pair h1 { font-size: 30px; margin: 0; }
+.pair p { color: var(--muted); margin: 0; }
+.code { display: flex; gap: 10px; justify-content: center; }
+.code input { width: 58px; height: 70px; text-align: center; font-size: 32px; border-radius: 16px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+.err { color: var(--bad); min-height: 1.4em; }
+.toast { position: fixed; left: 50%; bottom: calc(var(--bottom) + 92px); transform: translateX(-50%); background: rgba(255,255,255,.95); color: #111;
+  padding: 10px 16px; border-radius: 999px; font-size: 14px; font-weight: 600; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 30; white-space: nowrap; }
+.toast.on { opacity: 1; }
+@media (max-height: 640px) { .key { width: 60px; height: 60px; } .rocker { width: 60px; height: 134px; } .pad { min-height: 170px; } }
+@media (prefers-reduced-motion: reduce) { .key, .pad .glow, .toast { transition: none; } }
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+<div class="sheet-bg" id="sheetBg" hidden><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+'use strict';
+const I = {
+  power: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
+  tv: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5.5v13l8-6.5z"/><rect x="14" y="5.5" width="2.6" height="13" rx="1"/><rect x="18.4" y="5.5" width="2.6" height="13" rx="1"/></svg>',
+  mute: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 9l4 6M21 9l-4 6"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  minus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/></svg>',
+  kbd: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" stroke-linecap="round"/></svg>',
+  input: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M10 7H4v10h16v-4"/><path d="M14 3h7v7M21 3l-9 9"/></svg>',
+  remote: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7" y="2.5" width="10" height="19" rx="5"/><circle cx="12" cy="8" r="2.4"/></svg>',
+  presets: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z"/></svg>',
+  looks: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.6"/></svg>',
+  apps: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
+};
+const COLORS = ['#3a2a66', '#1d4f91', '#1f8a6a', '#c47a3d', '#b2344d', '#5b5f6b'];
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} },
+};
+let token = store.get('tvToken');
+let tab = store.get('tvTab') || 'remote';
+let state = { name: 'TV', volume: 0, maxVolume: 100, keys: 'STARTING' };
+let looks = null, apps = null, presets = null, lastApplied = null;
+
+async function api(path, body) {
+  const opts = { method: body === undefined ? 'GET' : 'POST', headers: {} };
+  if (token) opts.headers['X-Remote-Token'] = token;
+  if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && !path.startsWith('/api/pair')) { token = null; store.set('tvToken', null); render(); }
+  if (!r.ok) throw new Error(data.error || 'The TV did not answer.');
+  return data;
+}
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove('on'), 1600);
+}
+const buzz = ms => { try { navigator.vibrate && navigator.vibrate(ms); } catch (e) {} };
+
+// Keys go out one at a time, in order: a fast swipe must not reorder Left and Right.
+let keyChain = Promise.resolve();
+function key(k, long) {
+  buzz(long ? 18 : 6);
+  keyChain = keyChain.then(() => api('/api/key', { key: k, long: !!long }).then(r => { if (r.keys && r.keys !== state.keys) { state.keys = r.keys; paintStatus(); } }))
+    .catch(e => toast(e.message));
+}
+
+// ---------- pairing ----------
+function renderPair() {
+  $('#app').innerHTML = `
+    <div class="pair">
+      <h1>Pair with your TV</h1>
+      <p>Tap below and a 4-digit code appears on the TV.</p>
+      <button class="btn primary" id="show" style="flex:none">Show code on TV</button>
+      <div class="code" id="code" hidden>
+        ${[0, 1, 2, 3].map(i => `<input id="c${i}" inputmode="numeric" maxlength="1" autocomplete="one-time-code" aria-label="Digit ${i + 1}">`).join('')}
+      </div>
+      <div class="err" id="err"></div>
+    </div>`;
+  $('#show').onclick = async () => {
+    try { await api('/api/pair/start', {}); $('#code').hidden = false; $('#c0').focus(); $('#show').textContent = 'Show a new code'; $('#err').textContent = ''; }
+    catch (e) { $('#err').textContent = e.message; }
+  };
+  const boxes = [0, 1, 2, 3].map(i => $('#c' + i));
+  boxes.forEach((b, i) => {
+    b.addEventListener('input', () => {
+      const v = b.value.replace(/\D/g, '');
+      if (v.length > 1) { v.split('').slice(0, 4).forEach((d, j) => { if (boxes[j]) boxes[j].value = d; }); }
+      else b.value = v;
+      if (v && i < 3) boxes[i + 1].focus();
+      const code = boxes.map(x => x.value).join('');
+      if (code.length === 4) finish(code);
+    });
+    b.addEventListener('keydown', e => { if (e.key === 'Backspace' && !b.value && i > 0) boxes[i - 1].focus(); });
+  });
+  async function finish(code) {
+    try {
+      const r = await api('/api/pair/finish', { code });
+      token = r.token; store.set('tvToken', token); state.name = r.name; buzz(20); render(); refresh();
+    } catch (e) { $('#err').textContent = e.message; boxes.forEach(x => x.value = ''); boxes[0].focus(); }
+  }
+}
+
+// ---------- remote ----------
+function renderRemote(v) {
+  v.innerHTML = `
+    <div class="hdr">
+      <div class="tv"><b id="tvName">${esc(state.name)}</b><span><i class="dot" id="dot"></i><em id="status" style="font-style:normal"></em></span></div>
+      <button class="round" id="power" aria-label="Power">${I.power}</button>
+    </div>
+    <div class="banner" id="banner" hidden></div>
+    <div class="pad" id="pad" aria-label="Touch surface: swipe to move, tap to select, hold for options">
+      <div class="glow" id="glow"></div><div class="flash" id="flash"></div>
+      <div class="hint">Swipe to move · tap to select · hold for options</div>
+    </div>
+    <div class="keys">
+      <button class="key" data-key="back" aria-label="Back">${I.back}</button>
+      <button class="key" data-key="home" aria-label="Home">${I.tv}</button>
+      <div class="rocker" role="group" aria-label="Volume">
+        <button data-hold="volup" aria-label="Volume up">${I.plus}</button>
+        <button data-hold="voldown" aria-label="Volume down">${I.minus}</button>
+      </div>
+      <button class="key" data-key="playpause" aria-label="Play or pause">${I.play}</button>
+      <button class="key" data-key="mute" aria-label="Mute">${I.mute}</button>
+    </div>
+    <div class="minirow">
+      <button class="mini" id="kbdBtn">${I.kbd}Keyboard</button>
+      <button class="mini" data-key="input">${I.input}Inputs</button>
+    </div>`;
+  v.querySelectorAll('[data-key]').forEach(b => b.onclick = () => key(b.dataset.key));
+  v.querySelectorAll('[data-hold]').forEach(b => holdRepeat(b, () => key(b.dataset.hold)));
+  $('#power').onclick = () => key('power');
+  $('#kbdBtn').onclick = openKeyboard;
+  touchPad($('#pad'));
+  paintStatus();
+}
+function paintStatus() {
+  const dot = $('#dot'), st = $('#status'), banner = $('#banner');
+  if (!dot) return;
+  const k = state.keys;
+  dot.className = 'dot ' + (k === 'READY' ? 'ok' : k === 'STARTING' ? 'warn' : 'bad');
+  st.textContent = k === 'READY' ? 'Connected' : k === 'STARTING' ? 'Getting ready' : 'Keys need attention';
+  banner.hidden = !(k === 'NEEDS_APPROVAL' || k === 'NO_ADB');
+  banner.textContent = k === 'NO_ADB'
+    ? 'USB debugging is off on the TV, so only volume, looks, presets and apps work. Turn it on in Developer options.'
+    : 'Look at the TV: choose "Always allow" on the debugging prompt so this remote can press keys.';
+}
+function holdRepeat(el, fn) {
+  let t1, t2;
+  const stop = () => { clearTimeout(t1); clearInterval(t2); };
+  el.addEventListener('pointerdown', e => { e.preventDefault(); fn(); t1 = setTimeout(() => { t2 = setInterval(fn, 170); }, 380); });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => el.addEventListener(ev, stop));
+}
+// The touch surface works like the Siri Remote's: every STEP pixels of travel is one move, along the
+// dominant axis, so a long slow swipe walks across a row and a short flick moves one tile.
+function touchPad(pad) {
+  const STEP = 46, glow = $('#glow'), flash = $('#flash');
+  let id = null, sx, sy, lx, ly, ax, ay, t0, moved, longT, longFired;
+  const place = (x, y) => { const r = pad.getBoundingClientRect(); glow.style.left = (x - r.left) + 'px'; glow.style.top = (y - r.top) + 'px'; };
+  pad.addEventListener('pointerdown', e => {
+    if (id !== null) return;
+    id = e.pointerId; pad.setPointerCapture(id);
+    sx = lx = e.clientX; sy = ly = e.clientY; ax = ay = 0; t0 = performance.now(); moved = false; longFired = false;
+    pad.classList.add('touching'); place(e.clientX, e.clientY);
+    longT = setTimeout(() => { if (!moved) { longFired = true; key('ok', true); flash.classList.add('on'); setTimeout(() => flash.classList.remove('on'), 120); } }, 550);
+  });
+  pad.addEventListener('pointermove', e => {
+    if (e.pointerId !== id) return;
+    place(e.clientX, e.clientY);
+    ax += e.clientX - lx; ay += e.clientY - ly; lx = e.clientX; ly = e.clientY;
+    if (Math.hypot(e.clientX - sx, e.clientY - sy) > 12) { moved = true; clearTimeout(longT); }
+    while (Math.abs(ax) >= STEP && Math.abs(ax) >= Math.abs(ay)) { key(ax > 0 ? 'right' : 'left'); ax -= Math.sign(ax) * STEP; ay *= .5; }
+    while (Math.abs(ay) >= STEP && Math.abs(ay) > Math.abs(ax)) { key(ay > 0 ? 'down' : 'up'); ay -= Math.sign(ay) * STEP; ax *= .5; }
+  });
+  const end = e => {
+    if (e.pointerId !== id) return;
+    clearTimeout(longT); pad.classList.remove('touching'); id = null;
+    const dt = performance.now() - t0;
+    if (!moved && !longFired && dt < 450) { key('ok'); flash.classList.add('on'); setTimeout(() => flash.classList.remove('on'), 90); }
+    else if (moved && dt < 220) {
+      // A quick flick shorter than one step still moves once, the way a flick on the Siri Remote does.
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.max(Math.abs(dx), Math.abs(dy)) >= 18 && Math.max(Math.abs(dx), Math.abs(dy)) < STEP)
+        key(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+    }
+  };
+  pad.addEventListener('pointerup', end); pad.addEventListener('pointercancel', end);
+}
+function openKeyboard() {
+  sheet(`<h2>Type on the TV</h2>
+    <p style="margin:0;color:var(--muted);font-size:14px">Select a search box on the TV first, then type here.</p>
+    <form class="kbd" id="kbdForm"><input id="kbdIn" type="text" autocomplete="off" autocapitalize="off" enterkeyhint="send" placeholder="Search for a show"><button class="btn primary" style="flex:none;padding:12px 16px">Send</button></form>
+    <div class="row"><button class="btn" id="kbdDel">Delete</button><button class="btn" id="kbdEnter">Enter</button><button class="btn" id="kbdDone">Done</button></div>`);
+  $('#kbdIn').focus();
+  $('#kbdForm').onsubmit = e => { e.preventDefault(); const t = $('#kbdIn').value; if (t) api('/api/text', { text: t }).catch(x => toast(x.message)); $('#kbdIn').value = ''; };
+  $('#kbdDel').onclick = () => key('delete');
+  $('#kbdEnter').onclick = () => key('enter');
+  $('#kbdDone').onclick = closeSheet;
+}
+
+// ---------- presets ----------
+function describe(p) {
+  const bits = [];
+  if (p.wallpaper && looks) { const w = looks.wallpapers.find(x => x.id === p.wallpaper); if (w) bits.push(w.label); }
+  if (p.iconTheme != null && looks) bits.push(looks.iconThemes[p.iconTheme] + ' icons');
+  if (p.volume != null) bits.push('volume ' + p.volume);
+  if (p.app && apps) { const a = apps.find(x => x.pkg === p.app); bits.push('opens ' + (a ? a.label : p.app)); }
+  return bits.join(' · ') || 'Does nothing yet. Tap the pencil to set it up.';
+}
+async function renderPresets(v) {
+  v.innerHTML = `<div class="hdr"><h1>Presets</h1></div><div class="presets" id="plist"><p style="color:var(--muted)">Loading…</p></div>`;
+  [presets, looks, apps] = await Promise.all([api('/api/presets'), looks || api('/api/looks'), apps || api('/api/apps')]).catch(e => { toast(e.message); return [[], looks, apps]; });
+  const list = $('#plist'); if (!list) return;
+  list.innerHTML = presets.map(p => `
+    <div class="preset ${lastApplied === p.id ? 'applied' : ''}" style="background:linear-gradient(135deg, ${esc(p.color)}, ${esc(p.color)}cc)" data-id="${esc(p.id)}" role="button" tabindex="0">
+      <div class="txt"><div class="pn">${esc(p.name)}</div><div class="pd">${esc(describe(p))}</div></div>
+      <button class="edit" data-edit="${esc(p.id)}" aria-label="Edit ${esc(p.name)}">${I.pencil}</button>
+    </div>`).join('') + `<button class="ghost" id="newPreset">+ New preset from the current look</button>`;
+  list.querySelectorAll('.preset').forEach(el => el.onclick = async e => {
+    if (e.target.closest('[data-edit]')) return;
+    const p = presets.find(x => x.id === el.dataset.id);
+    try { await api('/api/presets/apply', { id: p.id }); lastApplied = p.id; buzz(15); toast(p.name + ' is on'); renderPresets(v); } catch (x) { toast(x.message); }
+  });
+  list.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editPreset(presets.find(x => x.id === b.dataset.edit)));
+  $('#newPreset').onclick = () => editPreset({ name: '', color: COLORS[presets.length % COLORS.length], wallpaper: looks.wallpaper, iconTheme: looks.iconTheme });
+}
+function editPreset(p) {
+  const isNew = !p.id;
+  sheet(`<h2>${isNew ? 'New preset' : 'Edit preset'}</h2>
+    <div class="field"><label for="pName">Name</label><input type="text" id="pName" value="${esc(p.name || '')}" placeholder="Movie night"></div>
+    <div class="field"><label>Colour</label><div class="swatches">${COLORS.map(c => `<button class="swatch" style="background:${c}" data-c="${c}" aria-label="Colour ${c}" aria-pressed="${c === p.color}"></button>`).join('')}</div></div>
+    <div class="field"><label for="pWall">Wallpaper</label><select id="pWall"><option value="">Keep the current one</option>${looks.wallpapers.map(w => `<option value="${esc(w.id)}" ${w.id === p.wallpaper ? 'selected' : ''}>${esc(w.label)}</option>`).join('')}</select></div>
+    <div class="field"><label for="pIcons">Icons</label><select id="pIcons"><option value="">Keep the current style</option>${looks.iconThemes.map((n, i) => `<option value="${i}" ${p.iconTheme === i ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div>
+    <div class="field"><label for="pVolOn">Volume</label><div class="vol"><input type="checkbox" id="pVolOn" ${p.volume != null ? 'checked' : ''} aria-label="Set the volume"><input type="range" id="pVol" min="0" max="${state.maxVolume}" value="${p.volume != null ? p.volume : state.volume}"><output id="pVolOut">${p.volume != null ? p.volume : state.volume}</output></div></div>
+    <div class="field"><label for="pApp">Then open</label><select id="pApp"><option value="">Stay on Home</option>${apps.map(a => `<option value="${esc(a.pkg)}" ${a.pkg === p.app ? 'selected' : ''}>${esc(a.label)}</option>`).join('')}</select></div>
+    <div class="row">${isNew ? '' : '<button class="btn danger" id="pDel">Delete</button>'}<button class="btn" id="pCancel">Cancel</button><button class="btn primary" id="pSave">Save</button></div>`);
+  let color = p.color || COLORS[0];
+  document.querySelectorAll('.swatch').forEach(s => s.onclick = () => { color = s.dataset.c; document.querySelectorAll('.swatch').forEach(x => x.setAttribute('aria-pressed', String(x === s))); });
+  $('#pVol').oninput = () => { $('#pVolOut').textContent = $('#pVol').value; $('#pVolOn').checked = true; };
+  $('#pCancel').onclick = closeSheet;
+  if (!isNew) $('#pDel').onclick = async () => { try { await api('/api/presets/delete', { id: p.id }); closeSheet(); render(); } catch (e) { toast(e.message); } };
+  $('#pSave').onclick = async () => {
+    const out = { id: p.id || '', name: $('#pName').value.trim() || 'Preset', color,
+      wallpaper: $('#pWall').value, app: $('#pApp').value,
+      iconTheme: $('#pIcons').value === '' ? null : Number($('#pIcons').value),
+      volume: $('#pVolOn').checked ? Number($('#pVol').value) : null };
+    try { await api('/api/presets/save', { preset: out }); closeSheet(); render(); toast('Saved'); } catch (e) { toast(e.message); }
+  };
+}
+
+// ---------- looks ----------
+async function renderLooks(v) {
+  v.innerHTML = `<div class="hdr"><h1>Looks</h1></div><div id="lk"><p style="color:var(--muted)">Loading…</p></div>`;
+  try { looks = await api('/api/looks'); } catch (e) { toast(e.message); return; }
+  const t = encodeURIComponent(token);
+  $('#lk').innerHTML = `
+    <div class="section-title">Wallpaper</div>
+    <div class="walls">${looks.wallpapers.map(w => `
+      <button class="wall ${w.id === looks.wallpaper ? 'on' : ''}" data-w="${esc(w.id)}" aria-label="${esc(w.label)}" aria-pressed="${w.id === looks.wallpaper}">
+        ${w.id === 'none' ? '<div class="ph" style="background:#000">Black</div>' : w.id === 'daily' ? '<div class="ph">A new one each day</div>'
+          : `<img loading="lazy" alt="" src="/api/thumb?id=${encodeURIComponent(w.id)}&t=${t}">`}
+        <span>${esc(w.label)}</span></button>`).join('')}</div>
+    <div class="section-title" style="margin-top:12px">Icons</div>
+    <div class="seg">${looks.iconThemes.map((n, i) => `<button data-i="${i}" aria-pressed="${i === looks.iconTheme}">${esc(n)}</button>`).join('')}</div>
+    <div class="section-title" style="margin-top:12px">Volume</div>
+    <div class="vol"><input type="range" id="lkVol" min="0" max="${state.maxVolume}" value="${state.volume}" aria-label="Volume"><output id="lkVolOut">${state.volume}</output></div>`;
+  $('#lk').querySelectorAll('[data-w]').forEach(b => b.onclick = async () => {
+    try { looks = await api('/api/look', { wallpaper: b.dataset.w }); buzz(10); renderLooks(v); } catch (e) { toast(e.message); }
+  });
+  $('#lk').querySelectorAll('[data-i]').forEach(b => b.onclick = async () => {
+    try { looks = await api('/api/look', { iconTheme: Number(b.dataset.i) }); buzz(10); renderLooks(v); } catch (e) { toast(e.message); }
+  });
+  let volTimer;
+  $('#lkVol').oninput = e => {
+    $('#lkVolOut').textContent = e.target.value;
+    clearTimeout(volTimer); volTimer = setTimeout(() => api('/api/volume', { set: Number(e.target.value) }).then(s => { state = Object.assign(state, s); }).catch(x => toast(x.message)), 120);
+  };
+}
+
+// ---------- apps ----------
+async function renderApps(v) {
+  v.innerHTML = `<div class="hdr"><h1>Apps</h1></div><div class="apps" id="al"><p style="color:var(--muted)">Loading…</p></div>`;
+  try { apps = await api('/api/apps'); } catch (e) { toast(e.message); return; }
+  const t = encodeURIComponent(token);
+  $('#al').innerHTML = apps.map(a => `<button class="appb" data-pkg="${esc(a.pkg)}"><img loading="lazy" alt="" src="/api/icon?pkg=${encodeURIComponent(a.pkg)}&t=${t}"><span>${esc(a.label)}</span></button>`).join('');
+  $('#al').querySelectorAll('[data-pkg]').forEach(b => b.onclick = async () => {
+    try { await api('/api/launch', { pkg: b.dataset.pkg }); buzz(12); toast('Opening ' + b.textContent.trim()); } catch (e) { toast(e.message); }
+  });
+}
+
+// ---------- shell ----------
+function sheet(html) { $('#sheet').innerHTML = html; $('#sheetBg').hidden = false; }
+function closeSheet() { $('#sheetBg').hidden = true; $('#sheet').innerHTML = ''; }
+$('#sheetBg').addEventListener('click', e => { if (e.target.id === 'sheetBg') closeSheet(); });
+
+const TABS = [['remote', 'Remote', I.remote], ['presets', 'Presets', I.presets], ['looks', 'Looks', I.looks], ['apps', 'Apps', I.apps]];
+function render() {
+  if (!token) { renderPair(); return; }
+  $('#app').innerHTML = `<div class="view ${tab === 'remote' ? '' : 'scroll'}" id="view"></div>
+    <nav class="tabs" role="tablist">${TABS.map(([k, l, ic]) => `<button role="tab" data-tab="${k}" aria-selected="${k === tab}">${ic}${l}</button>`).join('')}</nav>`;
+  document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; store.set('tvTab', tab); render(); });
+  const v = $('#view');
+  if (tab === 'remote') renderRemote(v);
+  else if (tab === 'presets') renderPresets(v);
+  else if (tab === 'looks') renderLooks(v);
+  else renderApps(v);
+}
+async function refresh() {
+  if (!token || document.hidden) return;
+  try {
+    const s = await api('/api/state');
+    state = Object.assign(state, s);
+    const n = $('#tvName'); if (n) n.textContent = state.name;
+    paintStatus();
+  } catch (e) { /* offline for a moment; the next refresh tries again */ }
+}
+document.addEventListener('visibilitychange', refresh);
+setInterval(refresh, 5000);
+render();
+refresh();
+</script>
+</body>
+</html>

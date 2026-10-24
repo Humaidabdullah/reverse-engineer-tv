@@ -80,4 +80,7 @@
     <bool name="tvos_focus">true</bool>
     <!-- A soft click on every focus move, as on tvOS. Also silent when the TV's system sounds are off. -->
     <bool name="focus_sounds">true</bool>
+    <!-- Phone remote: this TV serves a remote web app on port 8642 (PhoneRemote). Pair a phone with the code
+         the TV shows. Keys for other apps need ADB debugging left on, approved once for the launcher. -->
+    <bool name="phone_remote">true</bool>
 </resources>
