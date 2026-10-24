@@ -207,7 +207,7 @@ public final class PhoneRemote extends Service {
                 return apk;
             }
             if (p.equals("/api/hello")) {
-                return HttpServer.Response.ok(new JSONObject().put("name", tvName()).put("paired", authorized(r)));
+                return HttpServer.Response.ok(new JSONObject().put("name", tvName()).put("paired", authorized(r)).put("build", build()));
             }
         }
         if (r.method.equals("POST") && p.equals("/api/pair/start")) {
@@ -1025,6 +1025,15 @@ public final class PhoneRemote extends Service {
     }
 
     // ---- helpers -------------------------------------------------------------------------------
+
+    /** Changes with every launcher update; a phone showing an older page reloads to get the new one. */
+    private long build() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).lastUpdateTime;
+        } catch (PackageManager.NameNotFoundException e) {
+            return 0;
+        }
+    }
 
     private String tvName() {
         String name = Settings.Global.getString(getContentResolver(), "device_name");

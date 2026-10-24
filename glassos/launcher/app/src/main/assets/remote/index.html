@@ -685,7 +685,18 @@ function render() {
   else if (tab === 'looks') renderLooks(v);
   else renderApps(v);
 }
+// The page a phone has open can outlive a TV update (the app keeps it, a browser tab too): when the TV's
+// build changes, reload, so new buttons and fixes show up without reinstalling anything.
+let pageBuild = null;
+async function checkBuild() {
+  try {
+    const h = await fetch('/api/hello', { cache: 'no-store' }).then(r => r.json());
+    if (pageBuild === null) pageBuild = h.build;
+    else if (h.build && h.build !== pageBuild) location.reload();
+  } catch (e) { /* the TV is restarting; the next check will see it */ }
+}
 async function refresh() {
+  checkBuild();
   if (!token || document.hidden) return;
   try {
     const s = await api('/api/state');
