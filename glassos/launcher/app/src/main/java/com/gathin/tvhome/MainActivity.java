@@ -120,6 +120,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private long lastGlassMoveAt;
     /** Left/Right is being held (key repeats arriving). */
     private boolean holdingDpad;
+    /** tvOS-style focus (FocusMotion): the tile itself lifts, so the sliding glass highlight stays hidden. */
+    private boolean tvosFocus;
+    /** A held Left/Right moves focus at most this often, so each step gets a visible glide. */
+    private static final long REPEAT_MS = 115;
+    private long lastRepeatMove;
     /** LauncherPrefs revision this Home was built with; a newer one rebuilds it on resume. */
     private int prefsRev;
     /** Rebuilds Home shortly after a settings change, so the panel over it previews the result. */
@@ -252,6 +257,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         addBottomShade(prefs);
         LauncherPrefs.store(this).registerOnSharedPreferenceChangeListener(prefsListener);
         reducedMotion = cfg.reducedMotion;
+        tvosFocus = !reducedMotion && getResources().getBoolean(R.bool.tvos_focus);
+        if (tvosFocus) FocusMotion.Sound.init(this);
         liveTvPkg = cfg.liveTvPackage;
         liveTvAction = cfg.liveTvAction;
         inputAction = cfg.inputAction;
@@ -292,7 +299,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 // first and last icons keep the same inset from the band as when Home opens.
                 rect.set(0, 0, child.getWidth(), child.getHeight());
                 // Held D-pad: jump instead of animating, so the focused icon is always inside the dock.
-                return super.requestChildRectangleOnScreen(parent, child, rect, immediate || holdingDpad,
+                // tvOS focus paces held keys (REPEAT_MS), so the dock can keep gliding instead.
+                return super.requestChildRectangleOnScreen(parent, child, rect, immediate || (holdingDpad && !tvosFocus),
                         focusedChildVisible);
             }
         });
@@ -672,6 +680,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (tvosFocus) FocusMotion.Sound.release();
         handler.removeCallbacks(rebuildForPrefs);
         LauncherPrefs.store(this).unregisterOnSharedPreferenceChangeListener(prefsListener);
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
@@ -817,6 +826,30 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         Rect r = new Rect(0, 0, card.getWidth(), card.getHeight());
         root.offsetDescendantRectToMyCoords(card, r);
         float pad = 6f * density;        // matches GlassView's glow inset
+        if (!tvosFocus) moveGlass(card, r, pad);
+        View item = (View) card.getParent();
+        if (position < COLUMNS) {
+            // Dock: park it at the bottom of the screen and show the top shelf for this app.
+            int decoratedTop = item.getTop() - (int) (6 * density);
+            int dy = decoratedTop - grid.getPaddingTop();
+            // A 1px mismatch used to start a scroll on every dock move. Only scroll when the row is
+            // actually off; reduced motion does it in one jump so it does not fight the highlight.
+            boolean scroll = Math.abs(dy) > (int) (8 * density);
+            if (scroll) {
+                if (reducedMotion) grid.scrollBy(0, dy);
+                else grid.smoothScrollBy(0, dy);
+            }
+            showHero(position, scroll ? r.top - dy : r.top);
+        } else {
+            hideHero();
+            // Scroll just enough so the whole glass (not only the tile) is visible.
+            Rect want = new Rect(0, -(int) pad * 2, item.getWidth(), item.getHeight() + (int) pad);
+            grid.requestChildRectangleOnScreen(item, want, reducedMotion);
+        }
+    }
+
+    /** The sliding glass highlight (glassOS's own focus look), moved onto the focused tile. */
+    private void moveGlass(View card, Rect r, float pad) {
         float w = card.getWidth() * AppAdapter.FOCUS_SCALE + 2 * pad;
         float h = card.getHeight() * AppAdapter.FOCUS_SCALE + 2 * pad;
         float x = clampToDock(r.exactCenterX(), w);
@@ -852,25 +885,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             springX.animateToFinalPosition(x - glassScrollShiftX);
             springY.animateToFinalPosition(y - glassScrollShift);
         }
-        View item = (View) card.getParent();
-        if (position < COLUMNS) {
-            // Dock: park it at the bottom of the screen and show the top shelf for this app.
-            int decoratedTop = item.getTop() - (int) (6 * density);
-            int dy = decoratedTop - grid.getPaddingTop();
-            // A 1px mismatch used to start a scroll on every dock move. Only scroll when the row is
-            // actually off; reduced motion does it in one jump so it does not fight the highlight.
-            boolean scroll = Math.abs(dy) > (int) (8 * density);
-            if (scroll) {
-                if (reducedMotion) grid.scrollBy(0, dy);
-                else grid.smoothScrollBy(0, dy);
-            }
-            showHero(position, scroll ? r.top - dy : r.top);
-        } else {
-            hideHero();
-            // Scroll just enough so the whole glass (not only the tile) is visible.
-            Rect want = new Rect(0, -(int) pad * 2, item.getWidth(), item.getHeight() + (int) pad);
-            grid.requestChildRectangleOnScreen(item, want, reducedMotion);
-        }
     }
 
     // ---- top shelf -------------------------------------------------------------------------------
@@ -902,21 +916,25 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             heroName.setText(label);
             heroName.setY(y);
             heroName.setTranslationX(0f);
-            heroName.animate().alpha(1f).setDuration(260).start();
+            heroName.animate().alpha(1f).setDuration(FocusMotion.ms(this, 260)).start();
             setAmbient(color);
-            ambient.animate().alpha(1f).setDuration(600).start();
+            ambient.animate().alpha(1f).setDuration(FocusMotion.ms(this, 600)).start();
             heroShown = true;
         } else if (changed) {
-            heroName.animate().alpha(0f).translationX(-12 * density).setDuration(120).withEndAction(() -> {
+            // The title slides out the way the remote moved and the next one slides in after it.
+            float dir = FocusMotion.moveDir < 0 ? -1f : 1f;
+            heroName.animate().alpha(0f).translationX(-dir * 14 * density).setDuration(FocusMotion.ms(this, 110))
+                    .setInterpolator(new android.view.animation.AccelerateInterpolator(1.4f)).withEndAction(() -> {
                 heroName.setText(label);
                 heroName.setY(y);
-                heroName.setTranslationX(12 * density);
-                heroName.animate().alpha(1f).translationX(0f).setDuration(200).start();
+                heroName.setTranslationX(dir * 18 * density);
+                heroName.animate().alpha(1f).translationX(0f).setDuration(FocusMotion.ms(this, 320))
+                        .setInterpolator(new android.view.animation.DecelerateInterpolator(2.2f)).start();
             }).start();
             if (color != ambientColor) {
-                ambient.animate().alpha(0.35f).setDuration(200).withEndAction(() -> {
+                ambient.animate().alpha(0.35f).setDuration(FocusMotion.ms(this, 200)).withEndAction(() -> {
                     setAmbient(color);
-                    ambient.animate().alpha(1f).setDuration(500).start();
+                    ambient.animate().alpha(1f).setDuration(FocusMotion.ms(this, 500)).start();
                 }).start();
             }
         } else {
@@ -972,10 +990,14 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         // Horizontal: swallow the key at a row's ends so focus never wraps to the next row or
         // escapes up into the top bar. Mid-row moves fall through to the default focus search.
         if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-            return position % COLUMNS == 0;
+            boolean end = position % COLUMNS == 0;
+            if (end) bumpFocused(-1);
+            return end;
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-            return position % COLUMNS == COLUMNS - 1 || position == count - 1;
+            boolean end = position % COLUMNS == COLUMNS - 1 || position == count - 1;
+            if (end) bumpFocused(1);
+            return end;
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
             if (position < COLUMNS) return true;           // dock row: stay; holding or double-pressing Up opens the pills
@@ -987,6 +1009,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         focusTile(target);
         return true;
+    }
+
+    /** Nowhere further to go: the focused tile nudges that way and springs back, as tvOS does. */
+    private void bumpFocused(int dir) {
+        View f = getCurrentFocus();
+        if (!tvosFocus || f == null) return;
+        RecyclerView.ViewHolder vh = grid.findContainingViewHolder(f);
+        if (vh instanceof AppAdapter.Holder && ((AppAdapter.Holder) vh).motion != null) {
+            ((AppAdapter.Holder) vh).motion.bump(dir);
+        }
     }
 
     /** Two Up presses closer together than this count as a double press. */
@@ -1014,6 +1046,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // A held Left/Right repeats every ~50 ms, faster than a smooth scroll: focus would run ahead onto
             // icons still outside the dock (laid out for the scroll, but clipped), with the glow following.
             holdingDpad = event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() > 0;
+            if (tvosFocus && event.getAction() == KeyEvent.ACTION_DOWN) {
+                // Pace a held key so every step lifts and settles visibly; tvOS glides the same way.
+                if (event.getRepeatCount() > 0) {
+                    if (event.getEventTime() - lastRepeatMove < REPEAT_MS) return true;
+                }
+                lastRepeatMove = event.getEventTime();
+                FocusMotion.moveDir = code == KeyEvent.KEYCODE_DPAD_RIGHT ? 1 : -1;
+                FocusMotion.moveAt = SystemClock.uptimeMillis();
+            }
+        } else if (tvosFocus && event.getAction() == KeyEvent.ACTION_DOWN
+                && (code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN)) {
+            FocusMotion.moveDir = 0;
+            FocusMotion.moveAt = SystemClock.uptimeMillis();
         }
         if (event.getKeyCode() == KeyEvent.KEYCODE_DPAD_UP && event.getAction() == KeyEvent.ACTION_DOWN
                 && (event.getRepeatCount() > 0 || doubleUp) && topButtons.getVisibility() != View.VISIBLE) {

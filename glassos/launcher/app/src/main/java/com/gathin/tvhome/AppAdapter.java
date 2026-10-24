@@ -27,7 +27,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.view.animation.DecelerateInterpolator;
-import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
@@ -294,8 +293,12 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         h.name.setVisibility(position < dockSize ? View.INVISIBLE : View.VISIBLE);   // the dock has no labels
         boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
         h.name.setAlpha(focused ? 1f : 0f);
-        h.card.setScaleX(focused ? FOCUS_SCALE : 1f);
-        h.card.setScaleY(focused ? FOCUS_SCALE : 1f);
+        if (h.motion != null) {
+            h.motion.snap(focused);
+        } else {
+            h.card.setScaleX(focused ? FOCUS_SCALE : 1f);
+            h.card.setScaleY(focused ? FOCUS_SCALE : 1f);
+        }
         if (position < dockSize && e.icon != null) {
             // Dock: the app icon fills the square; adaptive icons drop the system mask (a circle on Google TV)
             // and show their layers full bleed, so the tile's rounded outline is the only shape.
@@ -589,6 +592,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         final TextView label;
         final TextView name;
         final boolean reducedMotion;
+        /** tvOS-style lift, lean and sheen; null with reduced motion, which keeps the plain scale. */
+        final FocusMotion motion;
 
         Holder(View v, TileListener listener, boolean reducedMotion) {
             super(v);
@@ -608,6 +613,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                 }
             });
             card.setClipToOutline(true);
+            motion = reducedMotion ? null : new FocusMotion(card, density);
 
             card.setOnKeyListener((view, keyCode, event) -> {
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
@@ -630,11 +636,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                             .start();
                     name.animate().alpha(focused ? 1f : 0f).setDuration(100).start();
                 } else {
-                    view.animate().scaleX(s).scaleY(s)
-                            .setDuration(focused ? 260 : 180)
-                            .setInterpolator(new OvershootInterpolator(focused ? 1.6f : 0f))
-                            .withLayer()
-                            .start();
+                    motion.focus(focused);
                     name.animate().alpha(focused ? 1f : 0f)
                             .translationY(focused ? density * 4f : -density * 6f)
                             .setDuration(220).start();

@@ -75,4 +75,9 @@
          tiles that zoom without overshoot, shorter fades and no tile entrance when Home comes back. Set it
          here or with "reduced_motion": true in a theme's config.json; false keeps the normal motion. -->
     <bool name="reduced_motion">false</bool>
+    <!-- tvOS-style focus: the focused icon lifts with a shadow, leans the way the remote moved and catches a
+         sheen, on springs (FocusMotion). false keeps glassOS's sliding glass highlight. Off with reduced_motion. -->
+    <bool name="tvos_focus">true</bool>
+    <!-- A soft click on every focus move, as on tvOS. Also silent when the TV's system sounds are off. -->
+    <bool name="focus_sounds">true</bool>
 </resources>
