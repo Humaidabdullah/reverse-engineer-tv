@@ -117,6 +117,7 @@ public class MainActivity extends Activity {
         });
         root.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        useWifiDirectly();
         nsd = getSystemService(NsdManager.class);
         String url = prefs.getString(KEY_URL, null);
         if (url != null) load(url);
@@ -133,6 +134,46 @@ public class MainActivity extends Activity {
     }
 
     // ---- finding the TV --------------------------------------------------------------------------
+
+    /**
+     * The TV is on the home Wi-Fi, so this app talks to it over Wi-Fi directly, even when a VPN app is on
+     * (a filtering or privacy VPN would otherwise carry every key press, or hide the home network from the
+     * scan altogether). Only possible for VPNs that allow it; other traffic on the phone is untouched.
+     */
+    private android.net.Network wifi;
+
+    private void useWifiDirectly() {
+        android.net.ConnectivityManager cm = getSystemService(android.net.ConnectivityManager.class);
+        android.net.NetworkRequest req = new android.net.NetworkRequest.Builder()
+                .addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI).build();
+        try {
+            cm.registerNetworkCallback(req, new android.net.ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onAvailable(android.net.Network n) {
+                    wifi = n;
+                    cm.bindProcessToNetwork(n);
+                }
+
+                @Override
+                public void onLost(android.net.Network n) {
+                    if (n.equals(wifi)) {
+                        wifi = null;
+                        cm.bindProcessToNetwork(null);
+                    }
+                }
+            });
+        } catch (RuntimeException ignored) {
+        }
+        for (android.net.Network n : cm.getAllNetworks()) {
+            android.net.NetworkCapabilities c = cm.getNetworkCapabilities(n);
+            if (c != null && c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+                    && !c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)) {
+                wifi = n;
+                cm.bindProcessToNetwork(n);
+                break;
+            }
+        }
+    }
 
     /** The launcher announces itself as _tvremote._tcp; a new address (the router changed it) is picked up here. */
     private void discover() {
@@ -178,7 +219,8 @@ public class MainActivity extends Activity {
             int prefix = 24;
             try {
                 android.net.ConnectivityManager cm = getSystemService(android.net.ConnectivityManager.class);
-                android.net.LinkProperties lp = cm.getLinkProperties(cm.getActiveNetwork());
+                // The Wi-Fi's own range, not the active network's: with a VPN on, that is the VPN's.
+                android.net.LinkProperties lp = cm.getLinkProperties(wifi != null ? wifi : cm.getActiveNetwork());
                 if (lp != null) {
                     for (android.net.LinkAddress a : lp.getLinkAddresses()) {
                         if (a.getAddress() instanceof java.net.Inet4Address) {
