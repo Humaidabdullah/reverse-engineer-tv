@@ -124,10 +124,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean tvosFocus;
     /** PackageManager's change counter at the last rebuild of the tiles; -1 before the first. */
     private int packageSeq = -1;
-    /** The open-app zoom: the icon's picture and the colour wash behind it, kept until Home is back. */
-    private android.widget.ImageView zoomIcon;
-    private View zoomCurtain;
-    private float zoomX, zoomY, zoomScale;
+    /** The open-app zoom (ZoomWindow): kept, fully open, until Home is back so it can close into the icon. */
+    private ZoomWindow zoom;
+    private View zoomTile;
     private boolean resumed;
     /** A held Left/Right moves focus at most this often, so each step gets a visible glide. */
     private static final long REPEAT_MS = 115;
@@ -266,6 +265,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         reducedMotion = cfg.reducedMotion;
         tvosFocus = !reducedMotion && getResources().getBoolean(R.bool.tvos_focus);
         if (tvosFocus) FocusMotion.Sound.init(this);
+        if (!reducedMotion) {
+            // Made once and kept hidden: adding it at launch time made Android lay out all of Home again.
+            zoom = new ZoomWindow(this);
+            ((ViewGroup) getWindow().getDecorView()).addView(zoom,
+                    new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        }
         if (getResources().getBoolean(R.bool.phone_remote)) PhoneRemote.start(this);
         liveTvPkg = cfg.liveTvPackage;
         liveTvAction = cfg.liveTvAction;
@@ -613,7 +618,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         } else if (!grid.hasFocus() && topButtons.getVisibility() != View.VISIBLE) {
             restoreFocus();
         }
-        zoomClose();
+        if (zoom != null) zoomClose();
         updateGreeting();
         updateWifiLabel();
         updateInputsButton();
@@ -1318,97 +1323,82 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     @Override
     public void onLaunch(View from, Intent intent, String label, int position) {
-        if (reducedMotion || from == null || from.getWidth() == 0 || root.getWidth() == 0) {
+        if (zoom == null || from == null || from.getWidth() == 0 || root.getWidth() == 0) {
             startApp(intent, null, label);
             return;
         }
-        zoomOpen(from, intent, label, adapter.ambientColorAt(position) | 0xFF000000);
+        zoomOpen(from, intent, label);
     }
 
-    /**
-     * The icon lifts off the dock and grows until it fills the screen while a wash of the app's own colour
-     * comes up behind it; the app then fades in on top. Drawn here rather than left to the system's
-     * scale-up transition, which this TV's window manager does not play.
-     */
-    private void zoomOpen(View card, Intent intent, String label, int color) {
+    /** Opens the app out of its tile, tvOS style (see ZoomWindow). */
+    private void zoomOpen(View card, Intent intent, String label) {
         removeZoom();
         int w = card.getWidth(), h = card.getHeight();
-        android.graphics.Bitmap snap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
-        card.draw(new android.graphics.Canvas(snap));
-        int[] at = new int[2], rootAt = new int[2];
+        // The tile's artwork at twice its size, so the little it grows stays sharp.
+        android.graphics.Bitmap art = android.graphics.Bitmap.createBitmap(w * 2, h * 2, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas c = new android.graphics.Canvas(art);
+        c.scale(2f, 2f);
+        card.draw(c);
+        ViewGroup decor = (ViewGroup) getWindow().getDecorView();
+        int[] at = new int[2], decorAt = new int[2];
         card.getLocationInWindow(at);
-        root.getLocationInWindow(rootAt);
-        float scale = card.getScaleX();
-        // getLocationInWindow is the scaled tile's corner; work from its centre.
-        zoomX = at[0] - rootAt[0] + w * scale / 2f - w / 2f;
-        zoomY = at[1] - rootAt[1] + h * card.getScaleY() / 2f - h / 2f;
-        zoomScale = scale;
-
-        zoomCurtain = new View(this);
-        zoomCurtain.setBackgroundColor(color);
-        zoomCurtain.setAlpha(0f);
-        root.addView(zoomCurtain, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        zoomIcon = new android.widget.ImageView(this);
-        zoomIcon.setImageBitmap(snap);
-        zoomIcon.setScaleType(android.widget.ImageView.ScaleType.FIT_XY);
-        float radius = AppAdapter.cornerRadius(w, h, density);
-        zoomIcon.setOutlineProvider(new android.view.ViewOutlineProvider() {
+        decor.getLocationInWindow(decorAt);
+        android.graphics.RectF onScreen = new android.graphics.RectF(at[0] - decorAt[0], at[1] - decorAt[1],
+                at[0] - decorAt[0] + w * card.getScaleX(), at[1] - decorAt[1] + h * card.getScaleY());
+        float radius = AppAdapter.cornerRadius(w, h, density) * card.getScaleX();
+        zoomTile = card;
+        zoom.prepare(onScreen, radius, art, iconBackground(art), new ZoomWindow.Listener() {
             @Override
-            public void getOutline(View v, android.graphics.Outline o) {
-                o.setRoundRect(0, 0, v.getWidth(), v.getHeight(), radius);
+            public void onReadyForApp() {
+                Bundle fadeIn = android.app.ActivityOptions.makeCustomAnimation(MainActivity.this,
+                        R.anim.app_zoom_enter, R.anim.app_zoom_hold).toBundle();
+                if (!startApp(intent, fadeIn, label)) zoomClose();
+            }
+
+            @Override
+            public void onClosed() {
+                removeZoom();
             }
         });
-        zoomIcon.setClipToOutline(true);
-        zoomIcon.setElevation(24 * density);
-        root.addView(zoomIcon, new FrameLayout.LayoutParams(w, h));
-        zoomIcon.setX(zoomX);
-        zoomIcon.setY(zoomY);
-        zoomIcon.setScaleX(scale);
-        zoomIcon.setScaleY(scale);
-        card.setAlpha(0f);   // the picture has left the dock
-
-        float fill = Math.max(root.getWidth() / (float) w, root.getHeight() / (float) h) * 1.06f;
-        long d = FocusMotion.ms(this, 380);
-        zoomIcon.animate().x((root.getWidth() - w) / 2f).y((root.getHeight() - h) / 2f).scaleX(fill).scaleY(fill)
-                .setDuration(d).setInterpolator(new android.view.animation.PathInterpolator(0.3f, 0f, 0.1f, 1f)).start();
-        android.animation.ObjectAnimator fade = android.animation.ObjectAnimator.ofFloat(zoomIcon, View.ALPHA, 1f, 0f);
-        fade.setStartDelay(d * 55 / 100);
-        fade.setDuration(d * 45 / 100);
-        fade.start();
-        zoomCurtain.animate().alpha(1f).setStartDelay(d / 4).setDuration(d * 3 / 4).start();
+        card.setAlpha(0f);   // the window is the tile now
+        zoom.open();
+        // If the app never takes over (it failed to start), do not leave the screen covered.
         handler.postDelayed(() -> {
-            card.setAlpha(1f);
-            Bundle fadeIn = android.app.ActivityOptions.makeCustomAnimation(this, R.anim.app_zoom_enter, R.anim.app_zoom_hold).toBundle();
-            if (!startApp(intent, fadeIn, label)) removeZoom();
-        }, d * 7 / 10);
-        // If the app never takes over (it crashed on start, say), do not leave the screen covered.
-        handler.postDelayed(() -> {
-            if (resumed && zoomCurtain != null) zoomClose();
-        }, d + 2500);
+            if (resumed && zoom.isShowing()) zoomClose();
+        }, 3000);
     }
 
-    /** Back on Home: the colour wash shrinks back into the icon on the dock, the reverse of opening. */
+    /** Back on Home: the app's window closes back into its tile. */
     private void zoomClose() {
-        if (zoomIcon == null || zoomCurtain == null) return;
-        android.widget.ImageView icon = zoomIcon;
-        View curtain = zoomCurtain;
-        zoomIcon = null;
-        zoomCurtain = null;
-        long d = FocusMotion.ms(this, 340);
-        icon.animate().cancel();
-        icon.setAlpha(0.0f);
-        icon.animate().x(zoomX).y(zoomY).scaleX(zoomScale).scaleY(zoomScale).alpha(1f)
-                .setDuration(d).setInterpolator(new android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f))
-                .withEndAction(() -> root.removeView(icon)).start();
-        curtain.animate().cancel();
-        curtain.animate().alpha(0f).setDuration(d * 8 / 10).withEndAction(() -> root.removeView(curtain)).start();
+        if (zoom == null || !zoom.isShowing()) return;
+        zoom.close();
     }
 
     private void removeZoom() {
-        if (zoomIcon != null) root.removeView(zoomIcon);
-        if (zoomCurtain != null) root.removeView(zoomCurtain);
-        zoomIcon = null;
-        zoomCurtain = null;
+        if (zoomTile != null) zoomTile.setAlpha(1f);
+        zoomTile = null;
+        if (zoom != null) zoom.cancel();
+    }
+
+    /**
+     * The colour the icon sits on, read from just inside its edges (clear of the rounded corners): white for
+     * Netflix and YouTube, blue for Prime Video. The opening window takes it, so the icon seems to open up.
+     */
+    private static int iconBackground(android.graphics.Bitmap b) {
+        int w = b.getWidth(), h = b.getHeight();
+        float[][] at = {{.5f, .06f}, {.5f, .94f}, {.06f, .5f}, {.94f, .5f}, {.2f, .1f}, {.8f, .1f}, {.2f, .9f}, {.8f, .9f}};
+        long r = 0, g = 0, bl = 0;
+        int n = 0;
+        for (float[] p : at) {
+            int px = b.getPixel(Math.min(w - 1, (int) (p[0] * w)), Math.min(h - 1, (int) (p[1] * h)));
+            if ((px >>> 24) < 128) continue;   // a transparent corner: not the background
+            r += (px >> 16) & 0xFF;
+            g += (px >> 8) & 0xFF;
+            bl += px & 0xFF;
+            n++;
+        }
+        if (n == 0) return 0xFF1C1C21;
+        return 0xFF000000 | (int) (r / n) << 16 | (int) (g / n) << 8 | (int) (bl / n);
     }
 
     private boolean startApp(Intent i, Bundle options, String label) {
