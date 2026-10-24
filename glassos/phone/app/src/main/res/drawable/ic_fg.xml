@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A remote: a rounded body, the touch ring and four buttons. Kept inside the adaptive icon's safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FF3A3D47" android:pathData="M45,28h18a9,9 0,0 1,9 9v34a9,9 0,0 1,-9 9h-18a9,9 0,0 1,-9 -9v-34a9,9 0,0 1,9 -9z" />
+    <path android:strokeColor="#E6FFFFFF" android:strokeWidth="2.4" android:fillColor="#00000000"
+        android:pathData="M54,36.5a7.5,7.5 0,1 1,0 15a7.5,7.5 0,1 1,0 -15z" />
+    <path android:fillColor="#E6FFFFFF" android:pathData="M48.5,60a2.4,2.4 0,1 1,0 4.8a2.4,2.4 0,1 1,0 -4.8z M59.5,60a2.4,2.4 0,1 1,0 4.8a2.4,2.4 0,1 1,0 -4.8z M48.5,68a2.4,2.4 0,1 1,0 4.8a2.4,2.4 0,1 1,0 -4.8z M59.5,68a2.4,2.4 0,1 1,0 4.8a2.4,2.4 0,1 1,0 -4.8z" />
+</vector>

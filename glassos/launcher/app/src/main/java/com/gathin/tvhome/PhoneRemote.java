@@ -129,10 +129,12 @@ public final class PhoneRemote extends Service {
         seedPresets();
         injector = new Injector(this);
         injector.warmUp();
+        allowMediaAccess();
         http = new HttpServer(PORT, this::route);
         try {
             http.start();
             Log.i(TAG, "listening on " + url());
+            announce();
         } catch (IOException e) {
             Log.e(TAG, "port " + PORT + " unavailable", e);
             stopSelf();
@@ -144,8 +146,36 @@ public final class PhoneRemote extends Service {
         return START_STICKY;
     }
 
+    /** Lets the phone app find this TV by name when the router gives it a new address. */
+    private void announce() {
+        android.net.nsd.NsdServiceInfo info = new android.net.nsd.NsdServiceInfo();
+        info.setServiceName(tvName());
+        info.setServiceType("_tvremote._tcp");
+        info.setPort(PORT);
+        nsdListener = new android.net.nsd.NsdManager.RegistrationListener() {
+            @Override public void onServiceRegistered(android.net.nsd.NsdServiceInfo i) { Log.i(TAG, "announced as " + i.getServiceName()); }
+            @Override public void onRegistrationFailed(android.net.nsd.NsdServiceInfo i, int code) { Log.w(TAG, "announce failed " + code); }
+            @Override public void onServiceUnregistered(android.net.nsd.NsdServiceInfo i) { }
+            @Override public void onUnregistrationFailed(android.net.nsd.NsdServiceInfo i, int code) { }
+        };
+        try {
+            getSystemService(android.net.nsd.NsdManager.class).registerService(info, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, nsdListener);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "announce failed", e);
+            nsdListener = null;
+        }
+    }
+
+    private android.net.nsd.NsdManager.RegistrationListener nsdListener;
+
     @Override
     public void onDestroy() {
+        if (nsdListener != null) {
+            try {
+                getSystemService(android.net.nsd.NsdManager.class).unregisterService(nsdListener);
+            } catch (RuntimeException ignored) {
+            }
+        }
         if (http != null) http.stop();
         main.post(this::hidePairing);
         super.onDestroy();
@@ -164,6 +194,12 @@ public final class PhoneRemote extends Service {
             if (p.equals("/") || p.equals("/index.html")) return asset("remote/index.html", "text/html; charset=utf-8");
             if (p.equals("/manifest.webmanifest")) return asset("remote/manifest.webmanifest", "application/manifest+json").cached(3600);
             if (p.equals("/icon.png")) return new HttpServer.Response(200, "image/png", appIcon()).cached(86400);
+            if (p.equals("/app.apk")) {
+                // The phone app (phone/ in this repo), bundled so the TV can hand it to the phone itself.
+                HttpServer.Response apk = asset("remote/app.apk", "application/vnd.android.package-archive");
+                apk.disposition = "attachment; filename=\"TV Remote.apk\"";
+                return apk;
+            }
             if (p.equals("/api/hello")) {
                 return HttpServer.Response.ok(new JSONObject().put("name", tvName()).put("paired", authorized(r)));
             }
@@ -190,6 +226,8 @@ public final class PhoneRemote extends Service {
                 case "/api/thumb": return image("thumb:" + param(r, "id") + ":" + thumbStamp(param(r, "id")),
                         () -> thumb(param(r, "id")), "image/jpeg");
                 case "/api/presets": return HttpServer.Response.ok(presets());
+                case "/api/nowplaying": return HttpServer.Response.ok(nowPlaying());
+                case "/api/nowplaying/art": return nowPlayingArt();
                 default: return HttpServer.Response.error(404, "Not found");
             }
         }
@@ -210,6 +248,11 @@ public final class PhoneRemote extends Service {
                 else injector.tap(code);
                 return HttpServer.Response.ok(new JSONObject().put("keys", injector.state().name()));
             }
+            case "/api/nowplaying/control":
+                control(b.optString("action"), b.optLong("position", -1));
+                return HttpServer.Response.ok(nowPlaying());
+            case "/api/search":
+                return HttpServer.Response.ok(new JSONObject().put("how", search(b.optString("query"), b.optString("app"))));
             case "/api/text":
                 injector.type(b.optString("text"));
                 return HttpServer.Response.ok(new JSONObject().put("ok", true));
@@ -602,6 +645,163 @@ public final class PhoneRemote extends Service {
         boolean current = prefs.getInt(LauncherPrefs.WALLPAPER, Wallpapers.NONE) == Wallpapers.FILE
                 && name.equals(prefs.getString(LauncherPrefs.WALL_FILE));
         if (f.isFile() && f.delete() && current) prefs.putWallpaper(Wallpapers.NONE, null);
+    }
+
+    // ---- now playing ---------------------------------------------------------------------------
+
+    /**
+     * Reading other apps' media sessions needs a notification listener. The launcher allows its own over
+     * the loopback ADB connection once; the owner never sees a prompt for it.
+     */
+    private void allowMediaAccess() {
+        android.content.ComponentName me = new android.content.ComponentName(this, MediaListener.class);
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (android.os.Build.VERSION.SDK_INT >= 27 && nm.isNotificationListenerAccessGranted(me)) return;
+        new Thread(() -> {
+            try {
+                AdbLoopback.shell(this, "cmd notification allow_listener " + me.flattenToString(), 60_000);
+                Log.i(TAG, "media sessions readable");
+            } catch (IOException e) {
+                Log.w(TAG, "could not allow media access: " + e.getMessage());
+            }
+        }, "remote-media-access").start();
+    }
+
+    /** The session worth showing: one that is playing, else the most recent one with something loaded. */
+    private android.media.session.MediaController controller() {
+        try {
+            android.media.session.MediaSessionManager msm = getSystemService(android.media.session.MediaSessionManager.class);
+            List<android.media.session.MediaController> all = msm.getActiveSessions(
+                    new android.content.ComponentName(this, MediaListener.class));
+            android.media.session.MediaController fallback = null;
+            for (android.media.session.MediaController c : all) {
+                android.media.session.PlaybackState st = c.getPlaybackState();
+                if (st != null && st.getState() == android.media.session.PlaybackState.STATE_PLAYING) return c;
+                if (fallback == null && c.getMetadata() != null && st != null
+                        && st.getState() != android.media.session.PlaybackState.STATE_NONE) fallback = c;
+            }
+            return fallback;
+        } catch (SecurityException e) {
+            return null;   // not allowed yet
+        }
+    }
+
+    private JSONObject nowPlaying() throws JSONException {
+        android.media.session.MediaController c = controller();
+        JSONObject o = new JSONObject().put("active", c != null);
+        if (c == null) return o;
+        android.media.MediaMetadata md = c.getMetadata();
+        android.media.session.PlaybackState st = c.getPlaybackState();
+        String pkg = c.getPackageName();
+        String app = pkg;
+        try {
+            app = String.valueOf(getPackageManager().getApplicationLabel(getPackageManager().getApplicationInfo(pkg, 0)));
+        } catch (PackageManager.NameNotFoundException ignored) {
+        }
+        String title = md == null ? "" : first(md, android.media.MediaMetadata.METADATA_KEY_DISPLAY_TITLE, android.media.MediaMetadata.METADATA_KEY_TITLE);
+        String sub = md == null ? "" : first(md, android.media.MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE,
+                android.media.MediaMetadata.METADATA_KEY_ARTIST, android.media.MediaMetadata.METADATA_KEY_ALBUM);
+        long duration = md == null ? 0 : md.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION);
+        long position = 0;
+        boolean playing = false;
+        if (st != null) {
+            playing = st.getState() == android.media.session.PlaybackState.STATE_PLAYING;
+            position = st.getPosition();
+            if (playing && st.getLastPositionUpdateTime() > 0) {
+                position += (long) ((android.os.SystemClock.elapsedRealtime() - st.getLastPositionUpdateTime()) * st.getPlaybackSpeed());
+            }
+        }
+        if (duration > 0) position = Math.max(0, Math.min(position, duration));
+        return o.put("pkg", pkg).put("app", app).put("title", title).put("subtitle", sub)
+                .put("playing", playing).put("position", position).put("duration", duration)
+                .put("art", Integer.toHexString((pkg + title).hashCode()))
+                .put("canSeek", st != null && (st.getActions() & android.media.session.PlaybackState.ACTION_SEEK_TO) != 0);
+    }
+
+    private static String first(android.media.MediaMetadata md, String... keys) {
+        for (String k : keys) {
+            CharSequence v = md.getText(k);
+            if (v != null && v.length() > 0) return v.toString();
+        }
+        return "";
+    }
+
+    private HttpServer.Response nowPlayingArt() throws Exception {
+        android.media.session.MediaController c = controller();
+        if (c == null) return HttpServer.Response.error(404, "Nothing is playing.");
+        android.media.MediaMetadata md = c.getMetadata();
+        Bitmap art = null;
+        if (md != null) {
+            for (String k : new String[]{android.media.MediaMetadata.METADATA_KEY_ART, android.media.MediaMetadata.METADATA_KEY_ALBUM_ART,
+                    android.media.MediaMetadata.METADATA_KEY_DISPLAY_ICON}) {
+                if (art == null) art = md.getBitmap(k);
+            }
+        }
+        if (art == null) return new HttpServer.Response(200, "image/png", appIconPng(c.getPackageName())).cached(60);
+        if (art.getWidth() > 640) art = Bitmap.createScaledBitmap(art, 640, Math.max(1, art.getHeight() * 640 / art.getWidth()), true);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        art.compress(Bitmap.CompressFormat.JPEG, 82, out);
+        return new HttpServer.Response(200, "image/jpeg", out.toByteArray()).cached(60);
+    }
+
+    /** Through the app's own session, so Play/Pause and skipping work like the app's own buttons. */
+    private void control(String action, long position) {
+        android.media.session.MediaController c = controller();
+        if (c == null) {
+            if (action.equals("toggle")) injector.tap(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
+            return;
+        }
+        android.media.session.MediaController.TransportControls t = c.getTransportControls();
+        android.media.session.PlaybackState st = c.getPlaybackState();
+        boolean playing = st != null && st.getState() == android.media.session.PlaybackState.STATE_PLAYING;
+        switch (action) {
+            case "toggle": if (playing) t.pause(); else t.play(); break;
+            case "next": t.skipToNext(); break;
+            case "previous": t.skipToPrevious(); break;
+            case "forward": t.seekTo((st == null ? 0 : st.getPosition()) + 10_000); break;
+            case "rewind": t.seekTo(Math.max(0, (st == null ? 0 : st.getPosition()) - 10_000)); break;
+            case "seek": if (position >= 0) t.seekTo(position); break;
+            default: break;
+        }
+    }
+
+    // ---- voice search --------------------------------------------------------------------------
+
+    /**
+     * A spoken search. YouTube opens its results page; apps that take Android's search intent get the
+     * query there; otherwise the words are typed into whatever box has focus on the TV.
+     */
+    private String search(String query, String app) {
+        query = query.trim();
+        if (query.isEmpty()) return "nothing";
+        if (app.isEmpty() || app.equals("com.google.android.youtube.tv")) {
+            Intent yt = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://www.youtube.com/results?search_query="
+                    + android.net.Uri.encode(query))).setPackage("com.google.android.youtube.tv").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (getPackageManager().resolveActivity(yt, 0) != null) {
+                startOnMain(yt);
+                return "youtube";
+            }
+        }
+        if (!app.isEmpty()) {
+            Intent si = new Intent(Intent.ACTION_SEARCH).setPackage(app).putExtra(android.app.SearchManager.QUERY, query)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (getPackageManager().resolveActivity(si, 0) != null) {
+                startOnMain(si);
+                return "app";
+            }
+        }
+        injector.type(query);
+        return "typed";
+    }
+
+    private void startOnMain(Intent i) {
+        main.post(() -> {
+            try {
+                startActivity(i);
+            } catch (RuntimeException e) {
+                Log.w(TAG, "could not open " + i, e);
+            }
+        });
     }
 
     // ---- presets -------------------------------------------------------------------------------

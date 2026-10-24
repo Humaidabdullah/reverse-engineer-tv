@@ -40,6 +40,33 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .banner { background: rgba(242,185,75,.12); border: 1px solid rgba(242,185,75,.35); color: #f7d58d; border-radius: 14px; padding: 10px 12px; font-size: 14px; }
 .banner[hidden] { display: none; }
 
+/* now playing */
+.np { display: flex; gap: 12px; align-items: center; background: var(--surface); border-radius: 18px; padding: 10px 12px 12px; position: relative; overflow: hidden; }
+.np[hidden] { display: none; }
+.np img { width: 54px; height: 54px; border-radius: 10px; object-fit: cover; background: var(--surface-2); flex: none; }
+.np .meta { flex: 1; min-width: 0; }
+.np .t { font-weight: 650; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np .s { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np .ctl { display: flex; gap: 2px; flex: none; }
+.np .ctl button { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 50%; }
+.np .ctl button:active { background: var(--surface-2); }
+.np .ctl svg { width: 22px; height: 22px; }
+.np .prog { position: absolute; left: 12px; right: 12px; bottom: 5px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; }
+.np .prog i { display: block; height: 100%; width: 0; background: #fff; }
+.getapp { display: flex; gap: 10px; align-items: center; background: #1d2a44; border-radius: 16px; padding: 10px 12px; font-size: 14px; }
+.getapp a { color: #fff; font-weight: 700; text-decoration: none; background: #3b82f6; border-radius: 10px; padding: 7px 12px; white-space: nowrap; }
+.getapp button { color: var(--muted); font-size: 20px; padding: 0 4px; }
+.getapp[hidden] { display: none; }
+/* voice */
+.mic { background: #fff; color: #111; }
+.listen { display: grid; justify-items: center; gap: 14px; text-align: center; padding: 8px 0 4px; }
+.orb { width: 92px; height: 92px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff, #9cc3ff 30%, #6d5cff 60%, #e0569b);
+  animation: breathe 1.4s ease-in-out infinite; }
+@keyframes breathe { 0%, 100% { transform: scale(.88); filter: saturate(.9); } 50% { transform: scale(1.04); filter: saturate(1.3); } }
+.heard { font-size: 22px; font-weight: 600; min-height: 1.4em; }
+.tips { color: var(--muted); font-size: 13px; line-height: 1.6; }
+@media (prefers-reduced-motion: reduce) { .orb { animation: none; } }
+
 /* touch surface */
 .pad { flex: 1; min-height: 220px; border-radius: 28px; position: relative; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none;
   background: radial-gradient(90% 70% at 50% 35%, #2a2b33, #1c1d22 70%); box-shadow: inset 0 0 0 1px var(--line); }
@@ -160,6 +187,11 @@ const I = {
   presets: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z"/></svg>',
   looks: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.6"/></svg>',
   apps: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg>',
+  mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>',
+  prev: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 6h2v12H7zM20 6v12l-9-6z"/></svg>',
+  next: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 6h2v12h-2zM4 6v12l9-6z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
+  playOnly: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg>',
   pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
 };
 const COLORS = ['#3a2a66', '#1d4f91', '#1f8a6a', '#c47a3d', '#b2344d', '#5b5f6b'];
@@ -189,7 +221,8 @@ function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('on');
   clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove('on'), 1600);
 }
-const buzz = ms => { try { navigator.vibrate && navigator.vibrate(ms); } catch (e) {} };
+const native = window.TVRemoteNative || null;   // set by the Android app; null in a browser
+const buzz = ms => { try { if (native) native.haptic(ms); else if (navigator.vibrate) navigator.vibrate(ms); } catch (e) {} };
 
 // Keys go out one at a time, in order: a fast swipe must not reorder Left and Right.
 let keyChain = Promise.resolve();
@@ -198,6 +231,132 @@ function key(k, long) {
   keyChain = keyChain.then(() => api('/api/key', { key: k, long: !!long }).then(r => { if (r.keys && r.keys !== state.keys) { state.keys = r.keys; paintStatus(); } }))
     .catch(e => toast(e.message));
 }
+
+// ---------- presets from the phone's home screen (Android app) ----------
+function syncShortcuts() {
+  if (native && native.setPresets && presets) native.setPresets(JSON.stringify(presets.map(p => ({ id: p.id, name: p.name, color: p.color }))));
+}
+window.applyPresetById = async id => {
+  if (!token) { window.pendingPreset = id; return; }
+  try {
+    if (!presets) presets = await api('/api/presets');
+    const p = presets.find(x => x.id === id);
+    if (!p) { toast('That preset is gone.'); return; }
+    await api('/api/presets/apply', { id }); lastApplied = id; buzz(15); toast(p.name + ' is on');
+  } catch (e) { toast(e.message); }
+};
+
+// ---------- now playing ----------
+let np = { active: false }, npAt = 0, npTimer = null, npArtKey = '';
+async function pollNowPlaying() {
+  clearTimeout(npTimer);
+  if (!token || tab !== 'remote' || document.hidden) return;
+  try { np = await api('/api/nowplaying'); npAt = performance.now(); paintNowPlaying(); } catch (e) {}
+  npTimer = setTimeout(pollNowPlaying, 2500);
+}
+function paintNowPlaying() {
+  const card = $('#np'); if (!card) return;
+  card.hidden = !np.active || !(np.title || np.app);
+  if (card.hidden) return;
+  $('#npTitle').textContent = np.title || np.app;
+  $('#npSub').textContent = [np.subtitle, np.title ? np.app : ''].filter(Boolean).join(' · ');
+  $('#npPlay').innerHTML = np.playing ? I.pause : I.playOnly;
+  if (npArtKey !== np.art) { npArtKey = np.art; $('#npArt').src = '/api/nowplaying/art?t=' + encodeURIComponent(token) + '&k=' + np.art; }
+}
+function tickProgress() {
+  const bar = $('#npProg');
+  if (bar && np.active && np.duration > 0) {
+    const pos = np.position + (np.playing ? performance.now() - npAt : 0);
+    bar.style.width = Math.min(100, pos / np.duration * 100) + '%';
+  }
+  requestAnimationFrame(tickProgress);
+}
+requestAnimationFrame(tickProgress);
+async function npControl(action) {
+  buzz(8);
+  try { np = await api('/api/nowplaying/control', { action }); npAt = performance.now(); paintNowPlaying(); } catch (e) { toast(e.message); }
+}
+
+// ---------- voice ----------
+// The Android app listens with the phone's own recogniser; Chrome and Safari use the Web Speech API.
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+// Browsers only open the microphone on HTTPS pages, and the TV serves plain HTTP on the home network,
+// so in a browser voice works only where the page counts as secure; the app always can.
+const voiceSupported = () => !!(native && native.canListen && native.canListen()) || (!!Recognition && window.isSecureContext);
+let recog = null;
+function startVoice() {
+  buzz(12);
+  sheet(`<div class="listen"><div class="orb" aria-hidden="true"></div><div class="heard" id="heard">Listening…</div>
+    <div class="tips">Try "Movie night", "Open Netflix", "Volume 20", "Pause",<br>"Search Luffy on YouTube", or any words to type on the TV.</div>
+    <button class="btn" id="vStop" style="width:100%">Cancel</button></div>`);
+  $('#vStop').onclick = stopVoice;
+  if (native && native.canListen && native.canListen()) { native.listen(); return; }
+  recog = new Recognition();
+  recog.lang = navigator.language || 'en-IN';
+  recog.interimResults = true;
+  recog.maxAlternatives = 1;
+  recog.onresult = e => {
+    const r = e.results[e.results.length - 1];
+    const h = $('#heard'); if (h) h.textContent = r[0].transcript;
+    if (r.isFinal) { recog = null; voiceResult(r[0].transcript); }
+  };
+  recog.onerror = e => { recog = null; voiceError(e.error === 'not-allowed' ? 'Allow the microphone for this page to use voice.' : "Didn't catch that."); };
+  recog.onend = () => { if (recog) { recog = null; voiceError("Didn't catch that."); } };
+  recog.start();
+}
+function stopVoice() {
+  if (recog) { const r = recog; recog = null; r.abort(); }
+  if (native && native.stopListening) native.stopListening();
+  closeSheet();
+}
+// Called by the Android app with what it heard.
+window.onNativeVoice = (text, partial) => {
+  const h = $('#heard');
+  if (partial) { if (h) h.textContent = text; return; }
+  if (text) voiceResult(text); else voiceError("Didn't catch that.");
+};
+function voiceError(msg) { const h = $('#heard'); if (h) h.textContent = msg; setTimeout(closeSheet, 1400); }
+async function voiceResult(text) {
+  const h = $('#heard'); if (h) h.textContent = '"' + text + '"';
+  try { const said = await voiceCommand(text); toast(said); buzz(15); } catch (e) { toast(e.message); }
+  setTimeout(closeSheet, 500);
+}
+const norm = s => s.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+function findApp(name) {
+  const n = norm(name); if (!n || !apps) return null;
+  return apps.find(a => norm(a.label) === n) || apps.find(a => norm(a.label).startsWith(n)) || apps.find(a => n.includes(norm(a.label)))
+    || apps.find(a => norm(a.label).includes(n)) || null;
+}
+// Understands a small set of phrases; anything else is typed into the box that has focus on the TV.
+async function voiceCommand(text) {
+  if (!apps) apps = await api('/api/apps').catch(() => []);
+  if (!presets) presets = await api('/api/presets').catch(() => []);
+  const t = norm(text);
+  const preset = presets.find(p => norm(p.name) === t || t === norm(p.name) + ' mode' || t === 'start ' + norm(p.name));
+  if (preset) { await api('/api/presets/apply', { id: preset.id }); lastApplied = preset.id; return preset.name + ' is on'; }
+  let m;
+  if ((m = t.match(/^(?:open|launch|start|go to|play) (.+)$/)) && findApp(m[1])) {
+    const a = findApp(m[1]); await api('/api/launch', { pkg: a.pkg }); return 'Opening ' + a.label;
+  }
+  if ((m = t.match(/^(?:set )?volume (?:to )?(\d{1,3})$/))) { await api('/api/volume', { set: Number(m[1]) }); return 'Volume ' + m[1]; }
+  if (/^(?:volume up|louder|turn it up)$/.test(t)) { for (let i = 0; i < 4; i++) key('volup'); return 'Louder'; }
+  if (/^(?:volume down|quieter|softer|turn it down)$/.test(t)) { for (let i = 0; i < 4; i++) key('voldown'); return 'Quieter'; }
+  if (/^(?:mute|unmute)$/.test(t)) { key('mute'); return t === 'mute' ? 'Muted' : 'Unmuted'; }
+  if (/^(?:pause|play|resume|stop)$/.test(t)) { await npControl('toggle'); return t[0].toUpperCase() + t.slice(1); }
+  if (/^(?:next|skip|next episode)$/.test(t)) { await npControl('next'); return 'Next'; }
+  if (/^(?:go back|back)$/.test(t)) { key('back'); return 'Back'; }
+  if (/^(?:go home|home)$/.test(t)) { key('home'); return 'Home'; }
+  if (/^(?:turn off|turn off the tv|sleep|power off)$/.test(t)) { key('power'); return 'Turning off'; }
+  if ((m = t.match(/^(?:search(?: for)?|find|look up) (.+?)(?: on (.+))?$/))) {
+    const a = m[2] ? findApp(m[2]) : null;
+    const r = await api('/api/search', { query: m[1], app: a ? a.pkg : '' });
+    return r.how === 'typed' ? 'Typed "' + m[1] + '"' : 'Searching ' + (a ? a.label : 'YouTube') + ' for "' + m[1] + '"';
+  }
+  await api('/api/text', { text });
+  return 'Typed "' + text + '"';
+}
+// The Android app sends the phone's volume buttons here.
+window.remoteKey = k => key(k);
 
 // ---------- pairing ----------
 function renderPair() {
@@ -240,9 +399,19 @@ function renderRemote(v) {
   v.innerHTML = `
     <div class="hdr">
       <div class="tv"><b id="tvName">${esc(state.name)}</b><span><i class="dot" id="dot"></i><em id="status" style="font-style:normal"></em></span></div>
-      <button class="round" id="power" aria-label="Power">${I.power}</button>
+      <div style="display:flex;gap:10px">
+        <button class="round mic" id="micBtn" aria-label="Speak" ${voiceSupported() ? '' : 'hidden'}>${I.mic}</button>
+        <button class="round" id="power" aria-label="Power">${I.power}</button>
+      </div>
     </div>
+    <div class="getapp" id="getApp" hidden><span style="flex:1">Install the remote as an app: no browser bar, and your phone's volume buttons control the TV.</span><a href="/app.apk" download>Get app</a><button id="getAppX" aria-label="Not now">×</button></div>
     <div class="banner" id="banner" hidden></div>
+    <div class="np" id="np" hidden>
+      <img id="npArt" alt="">
+      <div class="meta"><div class="t" id="npTitle"></div><div class="s" id="npSub"></div></div>
+      <div class="ctl"><button id="npPrev" aria-label="Previous">${I.prev}</button><button id="npPlay" aria-label="Play or pause">${I.pause}</button><button id="npNext" aria-label="Next">${I.next}</button></div>
+      <div class="prog"><i id="npProg"></i></div>
+    </div>
     <div class="pad" id="pad" aria-label="Touch surface: swipe to move, tap to select, hold for options">
       <div class="glow" id="glow"></div><div class="flash" id="flash"></div>
       <div class="hint">Swipe to move · tap to select · hold for options</div>
@@ -264,6 +433,14 @@ function renderRemote(v) {
   v.querySelectorAll('[data-key]').forEach(b => b.onclick = () => key(b.dataset.key));
   v.querySelectorAll('[data-hold]').forEach(b => holdRepeat(b, () => key(b.dataset.hold)));
   $('#power').onclick = () => key('power');
+  $('#micBtn').onclick = startVoice;
+  const showGetApp = /android/i.test(navigator.userAgent) && !native && store.get('getAppHidden') !== '1';
+  $('#getApp').hidden = !showGetApp;
+  $('#getAppX').onclick = () => { store.set('getAppHidden', '1'); $('#getApp').hidden = true; };
+  $('#npPrev').onclick = () => npControl('previous');
+  $('#npNext').onclick = () => npControl('next');
+  $('#npPlay').onclick = () => npControl('toggle');
+  pollNowPlaying();
   $('#kbdBtn').onclick = openKeyboard;
   touchPad($('#pad'));
   paintStatus();
@@ -344,6 +521,7 @@ function describe(p) {
 async function renderPresets(v) {
   v.innerHTML = `<div class="hdr"><h1>Presets</h1></div><div class="presets" id="plist"><p style="color:var(--muted)">Loading…</p></div>`;
   [presets, looks, apps] = await Promise.all([api('/api/presets'), looks || api('/api/looks'), apps || api('/api/apps')]).catch(e => { toast(e.message); return [[], looks, apps]; });
+  syncShortcuts();
   const list = $('#plist'); if (!list) return;
   list.innerHTML = presets.map(p => `
     <div class="preset ${lastApplied === p.id ? 'applied' : ''}" style="background:linear-gradient(135deg, ${esc(p.color)}, ${esc(p.color)}cc)" data-id="${esc(p.id)}" role="button" tabindex="0">
@@ -367,7 +545,9 @@ function editPreset(p) {
     <div class="field"><label for="pIcons">Icons</label><select id="pIcons"><option value="">Keep the current style</option>${looks.iconThemes.map((n, i) => `<option value="${i}" ${p.iconTheme === i ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div>
     <div class="field"><label for="pVolOn">Volume</label><div class="vol"><input type="checkbox" id="pVolOn" ${p.volume != null ? 'checked' : ''} aria-label="Set the volume"><input type="range" id="pVol" min="0" max="${state.maxVolume}" value="${p.volume != null ? p.volume : state.volume}"><output id="pVolOut">${p.volume != null ? p.volume : state.volume}</output></div></div>
     <div class="field"><label for="pApp">Then open</label><select id="pApp"><option value="">Stay on Home</option>${apps.map(a => `<option value="${esc(a.pkg)}" ${a.pkg === p.app ? 'selected' : ''}>${esc(a.label)}</option>`).join('')}</select></div>
+    ${!isNew && native && native.pinPreset ? '<button class="btn" id="pPin">Add to phone home screen</button>' : ''}
     <div class="row">${isNew ? '' : '<button class="btn danger" id="pDel">Delete</button>'}<button class="btn" id="pCancel">Cancel</button><button class="btn primary" id="pSave">Save</button></div>`);
+  if ($('#pPin')) $('#pPin').onclick = () => { if (!native.pinPreset(JSON.stringify({ id: p.id, name: p.name, color: p.color }))) toast("This phone's home screen doesn't take shortcuts."); };
   let color = p.color || COLORS[0];
   document.querySelectorAll('.swatch').forEach(s => s.onclick = () => { color = s.dataset.c; document.querySelectorAll('.swatch').forEach(x => x.setAttribute('aria-pressed', String(x === s))); });
   $('#pVol').oninput = () => { $('#pVolOut').textContent = $('#pVol').value; $('#pVolOn').checked = true; };
@@ -499,10 +679,12 @@ async function refresh() {
     paintStatus();
   } catch (e) { /* offline for a moment; the next refresh tries again */ }
 }
-document.addEventListener('visibilitychange', refresh);
+document.addEventListener('visibilitychange', () => { refresh(); pollNowPlaying(); });
 setInterval(refresh, 5000);
 render();
 refresh();
+if (token && window.pendingPreset) { const id = window.pendingPreset; window.pendingPreset = null; window.applyPresetById(id); }
+if (token && native) api('/api/presets').then(p => { presets = p; syncShortcuts(); }).catch(() => {});
 </script>
 </body>
 </html>

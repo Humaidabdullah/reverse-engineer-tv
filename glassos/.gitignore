@@ -17,3 +17,6 @@ tools/restore-my-tv.sh
 adbkey
 adbkey.pub
 tools/venv
+
+# The phone app, built and copied in by phone/build-into-launcher.sh
+launcher/app/src/main/assets/remote/app.apk

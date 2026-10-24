@@ -118,6 +118,19 @@ final class FocusMotion {
         tilt.animateToFinalPosition(0f);
     }
 
+    /** OK on the tile: it dips like a pressed button and springs back while the app zooms open from it. */
+    void press() {
+        float s = AppAdapter.FOCUS_SCALE;
+        scaleX.cancel();
+        scaleY.cancel();
+        card.setScaleX(s * 0.93f);
+        card.setScaleY(s * 0.93f);
+        scaleX.setSpring(new SpringForce(s).setStiffness(500f).setDampingRatio(0.55f));
+        scaleY.setSpring(new SpringForce(s).setStiffness(500f).setDampingRatio(0.55f));
+        scaleX.start();
+        scaleY.start();
+    }
+
     /** A rebind: jump straight to the resting state, no motion. */
     void snap(boolean focused) {
         for (SpringAnimation a : new SpringAnimation[]{scaleX, scaleY, lift, raise, tilt, nudge, gloss}) a.cancel();

@@ -58,6 +58,7 @@ final class HttpServer {
         final String type;
         final byte[] body;
         String cache = "no-store";
+        String disposition;
 
         Response(int code, String type, byte[] body) {
             this.code = code;
@@ -201,6 +202,7 @@ final class HttpServer {
                 + "Content-Type: " + r.type + "\r\n"
                 + "Content-Length: " + r.body.length + "\r\n"
                 + "Cache-Control: " + r.cache + "\r\n"
+                + (r.disposition == null ? "" : "Content-Disposition: " + r.disposition + "\r\n")
                 + "X-Content-Type-Options: nosniff\r\n"
                 + "Connection: " + (close ? "close" : "keep-alive") + "\r\n\r\n";
         out.write(head.getBytes(StandardCharsets.US_ASCII));

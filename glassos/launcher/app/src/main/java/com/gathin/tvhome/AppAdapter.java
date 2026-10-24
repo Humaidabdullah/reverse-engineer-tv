@@ -331,7 +331,10 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
             h.label.setText(e.label);
             h.label.setVisibility(View.VISIBLE);
         }
-        h.card.setOnClickListener(v -> launch(e));
+        h.card.setOnClickListener(v -> {
+            if (h.motion != null) h.motion.press();
+            launch(e, v);
+        });
         h.card.setOnLongClickListener(v -> {
             if (e.kind == Entry.SETTINGS) {
                 listener.onOpenLauncherSettings();
@@ -480,7 +483,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     }
 
     /** Opens the tile's activity by explicit component, with no extras: a card can name nothing else. */
-    private void launch(Entry e) {
+    private void launch(Entry e, View from) {
         if (e.kind == Entry.SETTINGS) {
             listener.onOpenSettings();
             return;
@@ -495,7 +498,10 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
                 .setComponent(e.component)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
         try {
-            ctx.startActivity(i);
+            // The app's window grows out of the icon, as on tvOS, instead of the stock slide.
+            android.os.Bundle zoom = from == null || from.getWidth() == 0 ? null
+                    : android.app.ActivityOptions.makeScaleUpAnimation(from, 0, 0, from.getWidth(), from.getHeight()).toBundle();
+            ctx.startActivity(i, zoom);
         } catch (Exception ex) {
             Toast.makeText(ctx, ctx.getString(R.string.cant_open, e.label), Toast.LENGTH_SHORT).show();
         }
